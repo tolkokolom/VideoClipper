@@ -57,7 +57,7 @@ final class AppModel {
         for url in accepted {
             let clip = Clip(url: url)
             clips.append(clip)
-            Task { await clip.load() }
+            clip.startLoading()
         }
         if selectedClipID == nil, let first = clips.first(where: { $0.url == accepted[0] }) {
             select(first)

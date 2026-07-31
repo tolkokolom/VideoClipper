@@ -43,8 +43,18 @@ final class Clip: Identifiable {
 
     var exportState: ExportState = .idle
 
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+
     init(url: URL) {
         self.url = url
+    }
+
+    /// Kicks off the async metadata/poster load once. Kept as a handle so thumbnail
+    /// generation can await it — selecting a clip right after dropping it must not race
+    /// the load (a zero duration would skip thumbnails permanently).
+    func startLoading() {
+        guard loadTask == nil else { return }
+        loadTask = Task { await self.load() }
     }
 
     var rotationQuarters: Int { ((rotationSteps % 4) + 4) % 4 }
@@ -89,7 +99,8 @@ final class Clip: Identifiable {
 
     /// Generates the trim strip's thumbnails (lazily, first time the clip is selected).
     func loadStripThumbnails() async {
-        guard stripThumbnails.isEmpty, duration > 0 else { return }
+        await loadTask?.value
+        guard stripThumbnails.isEmpty, duration > 0, !loadFailed else { return }
         let datas = await Self.thumbnailDatas(url: url, duration: duration, count: 10)
         stripThumbnails = datas.compactMap { NSImage(data: $0) }
     }
