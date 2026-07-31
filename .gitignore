@@ -1,0 +1,6 @@
+.DS_Store
+*.xcodeproj
+xcuserdata/
+build/
+DerivedData/
+.devnotes.md
