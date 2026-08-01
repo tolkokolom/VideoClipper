@@ -11,6 +11,9 @@ import SwiftUI
 struct MainView: View {
     let model: AppModel
     @State private var isDropTargeted = false
+    /// Inspection-zoom state for the canvas — a viewing aid, reset on clip
+    /// switch, rotation, and entering Crop. Never touches the staged edits.
+    @State private var zoomState = ZoomMath.State.identity
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +53,23 @@ struct MainView: View {
             ZStack {
                 Color.black
                 if let clip = model.selectedClip, clip.isLoaded {
-                    PlayerCanvasView(player: model.player)
+                    PlayerCanvasView(
+                        player: model.player,
+                        visibleRect: ZoomMath.visibleRect(zoomState),
+                        onWheel: { deltaY, anchor in
+                            guard model.activeTool != .crop else { return }
+                            zoomState = ZoomMath.wheelZoom(zoomState, anchor: anchor, deltaY: deltaY)
+                        },
+                        onPinch: { factor, anchor in
+                            guard model.activeTool != .crop else { return }
+                            zoomState = ZoomMath.zoom(zoomState, anchor: anchor, factor: factor)
+                        },
+                        onPan: { dxFrac, dyFrac in
+                            guard model.activeTool != .crop, zoomState.zoom > 1 else { return }
+                            zoomState = ZoomMath.pan(zoomState, dxFrac: dxFrac, dyFrac: dyFrac)
+                        },
+                        onInteractionEnd: {}
+                    )
                     if model.activeTool == .crop {
                         CropOverlay(
                             videoRect: EditMath.fit(aspect: clip.rotatedAspect, in: geo.size),
@@ -66,6 +85,11 @@ struct MainView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: model.selectedClipID) { zoomState = .identity }
+        .onChange(of: model.selectedClip?.rotationQuarters) { zoomState = .identity }
+        .onChange(of: model.activeTool) {
+            if model.activeTool == .crop { zoomState = .identity }
+        }
     }
 
     private var dropHint: some View {
