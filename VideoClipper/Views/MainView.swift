@@ -14,6 +14,12 @@ struct MainView: View {
     /// Inspection-zoom state for the canvas — a viewing aid, reset on clip
     /// switch, rotation, and entering Crop. Never touches the staged edits.
     @State private var zoomState = ZoomMath.State.identity
+    /// True while the wheel/pinch/drag is engaging the zoom — the minimap is only up
+    /// while interacting, with a short linger after release (iOS ClipShot semantics).
+    @State private var minimapVisible = false
+    @State private var minimapHideTask: Task<Void, Never>?
+    /// Pop animation for the navigator — gentle, low overshoot.
+    private let minimapSpring: Animation = .spring(response: 0.3, dampingFraction: 0.85)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,16 +65,19 @@ struct MainView: View {
                         onWheel: { deltaY, anchor in
                             guard model.activeTool != .crop else { return }
                             zoomState = ZoomMath.wheelZoom(zoomState, anchor: anchor, deltaY: deltaY)
+                            minimapEngaged(hideAfter: 0.6)
                         },
                         onPinch: { factor, anchor in
                             guard model.activeTool != .crop else { return }
                             zoomState = ZoomMath.zoom(zoomState, anchor: anchor, factor: factor)
+                            minimapEngaged(hideAfter: nil)
                         },
                         onPan: { dxFrac, dyFrac in
                             guard model.activeTool != .crop, zoomState.zoom > 1 else { return }
                             zoomState = ZoomMath.pan(zoomState, dxFrac: dxFrac, dyFrac: dyFrac)
+                            minimapEngaged(hideAfter: nil)
                         },
-                        onInteractionEnd: {}
+                        onInteractionEnd: { minimapScheduleHide(after: 0.2) }
                     )
                     if model.activeTool == .crop {
                         CropOverlay(
@@ -83,12 +92,22 @@ struct MainView: View {
                     ProgressView()
                 }
             }
+            .overlay(alignment: .topLeading) {
+                if model.activeTool != .crop, let clip = model.selectedClip, clip.isLoaded {
+                    ZoomMinimap(displayedAspect: clip.previewAspect, visible: ZoomMath.visibleRect(zoomState))
+                        .scaleEffect(minimapVisible ? 1 : 0.5)
+                        .opacity(minimapVisible ? 1 : 0)
+                        .padding(14)
+                        .allowsHitTesting(false)
+                        .animation(minimapSpring, value: minimapVisible)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: model.selectedClipID) { zoomState = .identity }
-        .onChange(of: model.selectedClip?.rotationQuarters) { zoomState = .identity }
+        .onChange(of: model.selectedClipID) { resetZoom() }
+        .onChange(of: model.selectedClip?.rotationQuarters) { resetZoom() }
         .onChange(of: model.activeTool) {
-            if model.activeTool == .crop { zoomState = .identity }
+            if model.activeTool == .crop { resetZoom() }
         }
     }
 
@@ -104,6 +123,33 @@ struct MainView: View {
                 .font(.callout)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    /// Show the minimap now (if actually zoomed in); optionally schedule a hide —
+    /// wheel events have no "release", so each tick re-arms a 0.6s linger.
+    private func minimapEngaged(hideAfter delay: Double?) {
+        minimapHideTask?.cancel()
+        if zoomState.zoom > 1.05 {
+            withAnimation(minimapSpring) { minimapVisible = true }
+        }
+        if let delay { minimapScheduleHide(after: delay) }
+    }
+
+    /// Hide with a linger; a quick re-engagement cancels the pending hide, so the
+    /// pop reverses smoothly mid-dissolve instead of restarting.
+    private func minimapScheduleHide(after delay: Double) {
+        minimapHideTask?.cancel()
+        minimapHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            withAnimation(minimapSpring) { minimapVisible = false }
+        }
+    }
+
+    private func resetZoom() {
+        zoomState = .identity
+        minimapHideTask?.cancel()
+        minimapVisible = false
     }
 }
 
