@@ -92,6 +92,10 @@ final class PlayerHostNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        // Momentum-phase events (trackpad flicks decaying after the fingers lift) carry no
+        // new user intent — let them through unhandled so they don't keep zooming or
+        // re-arm the minimap linger.
+        guard event.momentumPhase == [] else { return }
         guard let onWheel, let anchor = anchor(for: event) else {
             super.scrollWheel(with: event)
             return

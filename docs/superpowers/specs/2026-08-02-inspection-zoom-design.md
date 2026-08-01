@@ -38,13 +38,28 @@ export. Everything returns to normal at 1×.
 Zoom state is **normalized**: `ZoomMath.State { zoom, cx, cy }` where
 `(cx, cy)` is the center of the visible region in 0…1 canvas coordinates
 (top-left origin). `visibleRect(state)` derives the normalized visible region;
-it drives both the layer transform and the minimap.
+it drives the layer transform.
+
+Pan and zoom clamp against the fitted video's rect, not the full canvas
+(`within video: CGRect` on `zoom`/`wheelZoom`/`pan`, normalized to canvas
+coordinates — defaults to the full canvas). Per axis: where the zoomed video
+overflows the viewport, the center clamps inside the video's band; where it
+doesn't (e.g. the short axis of a letterboxed clip until zoom pushes it past
+1:1), the center pins to the video band's midpoint — no pan on that axis.
+This matches iOS `clampedInspectionPan`, and it means a clip whose aspect
+differs from the canvas can never pan into pure letterbox. With the video
+rect equal to the full canvas the clamp reduces exactly to the old
+frame-relative behavior.
 
 The zoom is applied inside `PlayerHostNSView` by sizing `playerLayer` to
 `bounds × zoom` and offsetting it so the visible rect fills the view (the
 iOS approach — content moves inside a static host — so event coordinates stay
 trivially correct). The host layer masks to bounds. Window resize needs no
 special handling: `layout()` re-derives the frame from the normalized state.
+
+Momentum-phase scroll events (trackpad flicks still decaying after the
+fingers lift) are filtered out in `scrollWheel` — they carry no new user
+intent, so they neither zoom nor re-arm the minimap linger.
 
 ## Gesture capture
 
@@ -73,7 +88,11 @@ are ignored in Crop mode, pan only engages while zoomed.
 - **Yellow box:** `RoundedRectangle(cornerRadius: 4, style: .continuous)`
   filled `.ultraThinMaterial` + `.yellow.opacity(0.4)` overlay +
   `.yellow` strokeBorder 2.5; sides `max(6, visible × frame)`, offset clamped
-  inside the frame.
+  inside the frame. `visible` is **video-space**, not canvas-space:
+  `ZoomMath.videoViewport(canvasVisible:video:)` maps the canvas-normalized
+  `visibleRect` onto the fitted video's rect (the iOS `inspectionViewport`
+  math), so the box always reads as "this fraction of the video frame" even
+  when the video is letterboxed against the canvas.
 - **Widget:** `.shadow(color: .black.opacity(0.35), radius: 5, y: 2)`,
   `.animation(.smooth(duration: 0.3), value: displayedAspect)`, mounted
   top-leading with `.padding(14)`, `.allowsHitTesting(false)`.

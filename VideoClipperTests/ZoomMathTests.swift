@@ -75,4 +75,45 @@ struct ZoomMathTests {
     @Test func panAt1xStaysCentered() {
         #expect(ZoomMath.pan(.identity, dxFrac: 0.3, dyFrac: 0.3) == .identity)
     }
+
+    // MARK: - videoViewport / video-aware clamping
+
+    @Test func videoViewportFullCanvasIsIdentity() {
+        let r = ZoomMath.visibleRect(ZoomMath.State(zoom: 2, cx: 0.3, cy: 0.7))
+        let v = ZoomMath.videoViewport(canvasVisible: r, video: ZoomMath.fullCanvas)
+        #expect(close(v.minX, r.minX) && close(v.minY, r.minY))
+        #expect(close(v.width, r.width) && close(v.height, r.height))
+    }
+
+    @Test func portraitBandNoHorizontalOverflowPinsCenterAndReportsFullWidth() {
+        let video = CGRect(x: 0.35, y: 0, width: 0.3, height: 1)
+        // 0.3 * 2 = 0.6 < 1: the band doesn't overflow the viewport on x.
+        let s = ZoomMath.pan(ZoomMath.State(zoom: 2, cx: 0.5, cy: 0.5), dxFrac: 5, dyFrac: 0, within: video)
+        #expect(close(s.cx, video.midX))
+
+        let viewport = ZoomMath.videoViewport(canvasVisible: ZoomMath.visibleRect(s), video: video)
+        #expect(close(viewport.minX, 0))
+        #expect(close(viewport.width, 1))
+    }
+
+    @Test func portraitBandOverflowClampsInsideBandWithNoLetterbox() {
+        let video = CGRect(x: 0.35, y: 0, width: 0.3, height: 1)
+        // 0.3 * 8 = 2.4 > 1: the band overflows the viewport on x.
+        let s = ZoomMath.pan(ZoomMath.State(zoom: 8, cx: 0.5, cy: 0.5), dxFrac: 5, dyFrac: 0, within: video)
+        #expect(close(s.cx, video.minX + 1.0 / 16.0))
+
+        let visible = ZoomMath.visibleRect(s)
+        #expect(visible.minX >= video.minX - 1e-9)
+
+        let viewport = ZoomMath.videoViewport(canvasVisible: visible, video: video)
+        #expect(close(viewport.minX, 0))
+        #expect(close(viewport.width, 1 / (video.width * 8), 1e-6))
+    }
+
+    @Test func landscapeBandNoVerticalOverflowPinsCenter() {
+        let video = CGRect(x: 0, y: 0.3, width: 1, height: 0.4)
+        // 0.4 * 2 = 0.8 < 1: the band doesn't overflow the viewport on y.
+        let s = ZoomMath.pan(ZoomMath.State(zoom: 2, cx: 0.5, cy: 0.5), dxFrac: 0, dyFrac: 5, within: video)
+        #expect(close(s.cy, video.midY))
+    }
 }

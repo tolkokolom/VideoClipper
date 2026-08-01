@@ -64,17 +64,26 @@ struct MainView: View {
                         visibleRect: ZoomMath.visibleRect(zoomState),
                         onWheel: { deltaY, anchor in
                             guard model.activeTool != .crop else { return }
-                            zoomState = ZoomMath.wheelZoom(zoomState, anchor: anchor, deltaY: deltaY)
+                            zoomState = ZoomMath.wheelZoom(
+                                zoomState, anchor: anchor, deltaY: deltaY,
+                                within: videoFrac(for: clip, in: geo.size)
+                            )
                             minimapEngaged(hideAfter: 0.6)
                         },
                         onPinch: { factor, anchor in
                             guard model.activeTool != .crop else { return }
-                            zoomState = ZoomMath.zoom(zoomState, anchor: anchor, factor: factor)
+                            zoomState = ZoomMath.zoom(
+                                zoomState, anchor: anchor, factor: factor,
+                                within: videoFrac(for: clip, in: geo.size)
+                            )
                             minimapEngaged(hideAfter: nil)
                         },
                         onPan: { dxFrac, dyFrac in
                             guard model.activeTool != .crop, zoomState.zoom > 1 else { return }
-                            zoomState = ZoomMath.pan(zoomState, dxFrac: dxFrac, dyFrac: dyFrac)
+                            zoomState = ZoomMath.pan(
+                                zoomState, dxFrac: dxFrac, dyFrac: dyFrac,
+                                within: videoFrac(for: clip, in: geo.size)
+                            )
                             minimapEngaged(hideAfter: nil)
                         },
                         onInteractionEnd: { minimapScheduleHide(after: 0.2) }
@@ -94,7 +103,13 @@ struct MainView: View {
             }
             .overlay(alignment: .topLeading) {
                 if model.activeTool != .crop, let clip = model.selectedClip, clip.isLoaded {
-                    ZoomMinimap(displayedAspect: clip.previewAspect, visible: ZoomMath.visibleRect(zoomState))
+                    ZoomMinimap(
+                        displayedAspect: clip.previewAspect,
+                        visible: ZoomMath.videoViewport(
+                            canvasVisible: ZoomMath.visibleRect(zoomState),
+                            video: videoFrac(for: clip, in: geo.size)
+                        )
+                    )
                         .scaleEffect(minimapVisible ? 1 : 0.5)
                         .opacity(minimapVisible ? 1 : 0)
                         .padding(14)
@@ -150,6 +165,16 @@ struct MainView: View {
         zoomState = .identity
         minimapHideTask?.cancel()
         minimapVisible = false
+    }
+
+    /// The fitted video's rect, normalized to canvas coordinates (0…1, top-left origin) —
+    /// zoom/pan clamp against this instead of the full canvas, and the minimap maps its
+    /// yellow box onto it. `previewAspect` matches what's actually rendered (rotation +
+    /// staged crop), same aspect the minimap's white frame already uses.
+    private func videoFrac(for clip: Clip, in size: CGSize) -> CGRect {
+        guard size.width > 0, size.height > 0 else { return ZoomMath.fullCanvas }
+        let r = EditMath.fit(aspect: clip.previewAspect, in: size)
+        return CGRect(x: r.minX / size.width, y: r.minY / size.height, width: r.width / size.width, height: r.height / size.height)
     }
 }
 
