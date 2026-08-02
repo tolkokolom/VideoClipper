@@ -43,8 +43,9 @@ final class AppModel {
 
     // MARK: - Bin
 
-    /// Adds dropped/opened URLs that look like videos; selects the first added clip
-    /// if nothing is selected yet. Returns true when at least one clip was accepted.
+    /// Adds dropped/opened URLs that look like videos and focuses the editor on the
+    /// first clip of the batch. Re-dropping a file already in the bin focuses that
+    /// clip instead. Returns true when the drop did something (added or focused).
     @discardableResult
     func addClips(urls: [URL]) -> Bool {
         let accepted = urls.filter { url in
@@ -52,14 +53,20 @@ final class AppModel {
             let type = UTType(filenameExtension: url.pathExtension)
             return type?.conforms(to: .movie) == true || type?.conforms(to: .video) == true
         }
-        guard !accepted.isEmpty else { return false }
+        guard !accepted.isEmpty else {
+            if let existing = urls.lazy.compactMap({ url in self.clips.first(where: { $0.url == url }) }).first {
+                select(existing)
+                return true
+            }
+            return false
+        }
 
         for url in accepted {
             let clip = Clip(url: url)
             clips.append(clip)
             clip.startLoading()
         }
-        if selectedClipID == nil, let first = clips.first(where: { $0.url == accepted[0] }) {
+        if let first = clips.first(where: { $0.url == accepted[0] }) {
             select(first)
         }
         AppLog.app.info("added \(accepted.count) clip(s)")
