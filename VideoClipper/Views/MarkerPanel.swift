@@ -23,6 +23,9 @@ struct MarkerPanel: View {
             Text("Markers")
                 .font(.headline)
 
+            paintBar
+            thicknessSlider
+
             if clip.markers.isEmpty {
                 Text("Press M at the playhead to mark a frame.")
                     .font(.callout)
@@ -73,6 +76,87 @@ struct MarkerPanel: View {
                 justCopied = false
             }
         }
+    }
+
+    /// Swatches + undo/clear for painting on the frame under the playhead. Drawing
+    /// itself happens by dragging on the canvas while the Mark tool is active.
+    private var paintBar: some View {
+        HStack(spacing: 6) {
+            ForEach(PaintColor.allCases, id: \.self) { color in
+                Button {
+                    model.paintColor = color
+                } label: {
+                    Circle()
+                        .fill(color.swatch)
+                        .frame(width: 15, height: 15)
+                        .overlay(
+                            Circle().strokeBorder(
+                                .white.opacity(model.paintColor == color ? 0.9 : 0.25),
+                                lineWidth: model.paintColor == color ? 2 : 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            Button { model.undoStroke() } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.plain)
+            .disabled(model.markerAtPlayhead?.strokes.isEmpty ?? true)
+            .help("Undo last stroke on this frame")
+
+            Button { model.clearStrokes() } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.plain)
+            .disabled(model.markerAtPlayhead?.strokes.isEmpty ?? true)
+            .help("Clear all strokes on this frame")
+        }
+    }
+
+    /// Shape picker + brush thickness (normalized to the frame width, matching
+    /// PaintStroke.width).
+    private var thicknessSlider: some View {
+        HStack(spacing: 6) {
+            Button {
+                model.isSelectingStroke = true
+            } label: {
+                Image(systemName: "cursorarrow")
+                    .font(.system(size: 11))
+                    .foregroundStyle(model.isSelectingStroke ? Color.cyan : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Select — click a stroke, drag to move, corners to scale (⇧ uniform), ⌫ deletes")
+
+            shapeButton(.freehand, icon: "scribble", help: "Freehand brush")
+            shapeButton(.rectangle, icon: "rectangle", help: "Rectangle (⇧ locks square)")
+            shapeButton(.ellipse, icon: "circle", help: "Ellipse (⇧ locks circle)")
+
+            Divider().frame(height: 12)
+
+            Circle().fill(.secondary).frame(width: 3, height: 3)
+            Slider(value: Bindable(model).paintWidth, in: 0.002...0.03)
+                .controlSize(.mini)
+                .help("Brush thickness")
+            Circle().fill(.secondary).frame(width: 11, height: 11)
+        }
+    }
+
+    private func shapeButton(_ shape: PaintShapeKind, icon: String, help: String) -> some View {
+        let isActive = !model.isSelectingStroke && model.paintShape == shape
+        return Button {
+            model.isSelectingStroke = false
+            model.selectedStrokeID = nil
+            model.paintShape = shape
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(isActive ? Color.cyan : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func row(_ marker: Binding<FrameMarker>) -> some View {

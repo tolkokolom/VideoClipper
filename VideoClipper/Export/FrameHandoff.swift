@@ -55,7 +55,13 @@ nonisolated enum FrameHandoff {
             if offset > 0 {
                 line += String(format: " (Δ+%.2fs)", marker.time - markers[offset - 1].time)
             }
-            lines.append(line + " — " + path)
+            line += " — " + path
+            if !marker.strokes.isEmpty {
+                // Tells the agent the drawn highlight is the reporter's annotation,
+                // not part of the app under test.
+                line += " (annotated)"
+            }
+            lines.append(line)
             // The manifest is line-based: a newline typed into a note (⌥⏎) must not
             // break the entry structure, so inner newlines flatten to spaces.
             let note = marker.note

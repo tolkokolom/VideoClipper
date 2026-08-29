@@ -190,15 +190,97 @@ final class AppModel {
     /// frame even at 60 fps, so markers on adjacent stepped frames never collide.
     private let markerEpsilon = 0.01
 
+    /// The marker sitting under the playhead, if any.
+    var markerAtPlayhead: FrameMarker? {
+        selectedClip?.markers.first { abs($0.time - currentTime) < markerEpsilon }
+    }
+
+    private var markerIndexAtPlayhead: Int? {
+        selectedClip?.markers.firstIndex { abs($0.time - currentTime) < markerEpsilon }
+    }
+
     /// Adds a marker at the playhead, or removes the one already sitting there.
     func toggleMarker() {
         guard let clip = selectedClip else { return }
-        if let index = clip.markers.firstIndex(where: { abs($0.time - currentTime) < markerEpsilon }) {
+        if let index = markerIndexAtPlayhead {
             clip.markers.remove(at: index)
         } else {
             clip.markers.append(FrameMarker(time: currentTime))
             clip.markers.sort { $0.time < $1.time }
         }
+    }
+
+    // MARK: - Paint
+
+    /// Swatch used for the next stroke.
+    var paintColor: PaintColor = .red
+    /// Brush thickness for the next stroke, normalized to the frame width.
+    var paintWidth: CGFloat = PaintStroke.defaultWidth
+    /// Shape drawn by the next canvas drag.
+    var paintShape: PaintShapeKind = .freehand
+    /// True while the paint select tool is active — canvas drags select/move/scale
+    /// strokes instead of drawing.
+    var isSelectingStroke = false
+    /// The stroke selected for editing (must belong to the marker under the playhead).
+    var selectedStrokeID: PaintStroke.ID?
+
+    /// Adds a freehand stroke (normalized points) to the marker under the playhead,
+    /// marking the frame first when it isn't marked yet — drawing implies marking.
+    func addStroke(points: [CGPoint]) {
+        guard let clip = selectedClip, !points.isEmpty else { return }
+        if markerIndexAtPlayhead == nil {
+            toggleMarker()
+        }
+        guard let index = markerIndexAtPlayhead else { return }
+        clip.markers[index].strokes.append(
+            PaintStroke(kind: paintShape, points: points, color: paintColor, width: paintWidth))
+    }
+
+    /// Removes the most recent stroke of the marker under the playhead.
+    func undoStroke() {
+        guard let clip = selectedClip, let index = markerIndexAtPlayhead,
+              !clip.markers[index].strokes.isEmpty else { return }
+        clip.markers[index].strokes.removeLast()
+    }
+
+    /// Removes every stroke of the marker under the playhead.
+    func clearStrokes() {
+        guard let clip = selectedClip, let index = markerIndexAtPlayhead else { return }
+        clip.markers[index].strokes.removeAll()
+        selectedStrokeID = nil
+    }
+
+    /// (marker index, stroke index) of the selected stroke — nil when the selection
+    /// doesn't belong to the marker under the playhead.
+    private var selectedStrokeLocation: (marker: Int, stroke: Int)? {
+        guard let clip = selectedClip, let markerIndex = markerIndexAtPlayhead,
+              let id = selectedStrokeID,
+              let strokeIndex = clip.markers[markerIndex].strokes.firstIndex(where: { $0.id == id })
+        else { return nil }
+        return (markerIndex, strokeIndex)
+    }
+
+    func deleteSelectedStroke() {
+        guard let clip = selectedClip, let location = selectedStrokeLocation else { return }
+        clip.markers[location.marker].strokes.remove(at: location.stroke)
+        selectedStrokeID = nil
+    }
+
+    /// Moves the selected stroke by a normalized delta.
+    func translateSelectedStroke(by delta: CGPoint) {
+        guard let clip = selectedClip, let location = selectedStrokeLocation else { return }
+        clip.markers[location.marker].strokes[location.stroke] =
+            StrokeGeometry.translated(clip.markers[location.marker].strokes[location.stroke], by: delta)
+    }
+
+    /// Scales the selected stroke about a normalized anchor.
+    func scaleSelectedStroke(by factors: CGSize, anchor: CGPoint) {
+        guard let clip = selectedClip, let location = selectedStrokeLocation,
+              factors.width.isFinite, factors.height.isFinite else { return }
+        clip.markers[location.marker].strokes[location.stroke] =
+            StrokeGeometry.scaled(
+                clip.markers[location.marker].strokes[location.stroke],
+                by: factors, anchor: anchor)
     }
 
     /// Timeline pin clicked: show that frame, open the Mark tool, and ask the panel
@@ -215,9 +297,7 @@ final class AppModel {
     /// Return pressed outside a text field: edit the note of the marker under the
     /// playhead (the natural follow-up to M, which leaves the playhead on it).
     func editNoteAtPlayhead() {
-        guard let clip = selectedClip,
-              let marker = clip.markers.first(where: { abs($0.time - currentTime) < markerEpsilon })
-        else { return }
+        guard let marker = markerAtPlayhead else { return }
         requestNoteFocus(marker)
     }
 

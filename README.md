@@ -33,6 +33,13 @@ to mark frames — cyan ticks on the strip, with a pin per marker in a lane abov
 the timeline (hover shows the note and highlights the marker in the sidebar;
 click focuses its note field). The **Mark** tool (next to Crop) opens a right
 sidebar listing the markers vertically: jump, edit the optional note, remove.
+While the Mark tool is active, dragging on the canvas paints on the frame under
+the playhead (an unmarked frame gets marked automatically) — freehand, rectangle,
+or ellipse (`⇧` locks square/circle), with swatches, thickness, undo, and clear
+at the top of the sidebar. The select tool (cursor icon) picks a stroke by
+clicking it: drag inside its box to move, corner handles to scale (`⇧` uniform),
+`⌫` or the ✕ badge to delete. Strokes are baked into the exported JPEGs, with
+`(annotated)` flagged in the manifest.
 Then `⌘E` — "Copy Frames for Agent". That writes a `<name>-frames/`
 folder beside the video (downscaled JPEGs + a `frames.md` manifest with
 timestamps, deltas between frames, and notes) and puts the manifest with

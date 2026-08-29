@@ -68,7 +68,7 @@ struct MainView: View {
                         player: model.player,
                         visibleRect: ZoomMath.visibleRect(zoomState),
                         onWheel: { deltaY, anchor in
-                            guard model.activeTool != .crop else { return }
+                            guard model.activeTool != .crop, model.activeTool != .marker else { return }
                             zoomState = ZoomMath.wheelZoom(
                                 zoomState, anchor: anchor, deltaY: deltaY,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -76,7 +76,7 @@ struct MainView: View {
                             minimapEngaged(hideAfter: 0.6)
                         },
                         onPinch: { factor, anchor in
-                            guard model.activeTool != .crop else { return }
+                            guard model.activeTool != .crop, model.activeTool != .marker else { return }
                             zoomState = ZoomMath.zoom(
                                 zoomState, anchor: anchor, factor: factor,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -84,7 +84,8 @@ struct MainView: View {
                             minimapEngaged(hideAfter: nil)
                         },
                         onPan: { dxFrac, dyFrac in
-                            guard model.activeTool != .crop, zoomState.zoom > 1 else { return }
+                            guard model.activeTool != .crop, model.activeTool != .marker,
+                                  zoomState.zoom > 1 else { return }
                             zoomState = ZoomMath.pan(
                                 zoomState, dxFrac: dxFrac, dyFrac: dyFrac,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -98,6 +99,12 @@ struct MainView: View {
                             videoRect: EditMath.fit(aspect: clip.rotatedAspect, in: geo.size),
                             aspect: clip.cropAspect.ratio ?? clip.rotatedAspect,
                             cropRect: Bindable(clip).cropRect
+                        )
+                    }
+                    if model.activeTool == .marker {
+                        PaintOverlay(
+                            model: model,
+                            videoRect: EditMath.fit(aspect: clip.previewAspect, in: geo.size)
                         )
                     }
                 } else if model.clips.isEmpty {
@@ -127,7 +134,9 @@ struct MainView: View {
         .onChange(of: model.selectedClipID) { resetZoom() }
         .onChange(of: model.selectedClip?.rotationQuarters) { resetZoom() }
         .onChange(of: model.activeTool) {
-            if model.activeTool == .crop { resetZoom() }
+            // Crop and Mark both need the unzoomed frame (Mark: paint coordinates
+            // map straight onto the fitted rect only at 1x).
+            if model.activeTool == .crop || model.activeTool == .marker { resetZoom() }
         }
     }
 
@@ -217,7 +226,8 @@ private struct ControlsView: View {
                 }
             }
 
-            if !clip.markers.isEmpty {
+            // In Mark mode the lane is always up — it carries the mark-here button.
+            if !clip.markers.isEmpty || model.activeTool == .marker {
                 markerNoteLane
             }
 
@@ -351,6 +361,27 @@ private struct ControlsView: View {
                     }
                     .onTapGesture { model.requestNoteFocus(marker) }
                     .help(marker.note.isEmpty ? "Click to add a note" : marker.note)
+            }
+
+            // Quick action riding the playhead: mark this frame (or unmark, when
+            // the playhead already sits on a marker). Same action as M.
+            if model.activeTool == .marker {
+                let x = min(max(
+                    CGFloat(model.currentTime / max(clip.duration, 0.001)) * geo.size.width,
+                    14), geo.size.width - 14)
+                let onMarker = model.markerAtPlayhead != nil
+                Button { model.toggleMarker() } label: {
+                    Image(systemName: onMarker ? "xmark" : "plus")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(onMarker ? .white : .black)
+                        .frame(width: 24, height: 14)
+                        .background(
+                            onMarker ? Color.gray.opacity(0.65) : Color.cyan,
+                            in: RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .position(x: x, y: 8)
+                .help(onMarker ? "Remove this marker (M)" : "Mark this frame (M)")
             }
         }
         .frame(height: 16)

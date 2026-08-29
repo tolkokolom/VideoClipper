@@ -71,6 +71,19 @@ struct FrameHandoffTests {
         #expect(text.contains("note: line one line two"))
     }
 
+    @Test func manifestFlagsFramesCarryingPaintStrokes() {
+        let stroke = PaintStroke(points: [CGPoint(x: 0.5, y: 0.5)], color: .red)
+        let text = FrameHandoff.manifest(
+            sourceName: "a.mov", duration: 1,
+            markers: [
+                FrameMarker(time: 0, strokes: [stroke]),
+                FrameMarker(time: 0.5),
+            ],
+            basePath: nil)
+        #expect(text.contains("— 01_t0.00s.jpg (annotated)"))
+        #expect(text.contains("— 02_t0.50s.jpg\n") || text.hasSuffix("— 02_t0.50s.jpg"))
+    }
+
     @Test func manifestOmitsWhitespaceOnlyNotes() {
         let text = FrameHandoff.manifest(
             sourceName: "a.mov", duration: 1,

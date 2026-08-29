@@ -60,6 +60,9 @@ struct AppCommands: Commands {
             Button("Edit Marker Note") { model.editNoteAtPlayhead() }
                 .keyboardShortcut(.return, modifiers: [])
                 .disabled(model.selectedClip == nil || model.isEditingNote)
+            Button("Delete Selected Stroke") { model.deleteSelectedStroke() }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(model.selectedStrokeID == nil || model.isEditingNote)
             Button("Previous Marker") { model.jumpToMarker(offset: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
                 .disabled(model.selectedClip == nil || model.isEditingNote)

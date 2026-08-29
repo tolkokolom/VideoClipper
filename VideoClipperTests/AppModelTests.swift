@@ -171,6 +171,112 @@ struct AppModelTests {
         #expect(model.noteBlurSignal == before)
     }
 
+    // MARK: - Paint strokes
+
+    @Test func addStrokeOnUnmarkedFrameCreatesTheMarker() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.addStroke(points: [CGPoint(x: 0.2, y: 0.5), CGPoint(x: 0.8, y: 0.5)])
+        #expect(model.selectedClip?.markers.map(\.time) == [1.5])
+        #expect(model.selectedClip?.markers.first?.strokes.count == 1)
+    }
+
+    @Test func addStrokeUsesTheSelectedSwatchAndAppendsOnMarkedFrames() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.toggleMarker()
+        model.paintColor = .yellow
+        model.addStroke(points: [CGPoint(x: 0.1, y: 0.1)])
+        model.paintColor = .green
+        model.addStroke(points: [CGPoint(x: 0.9, y: 0.9)])
+        let marker = model.selectedClip?.markers.first
+        #expect(model.selectedClip?.markers.count == 1)
+        #expect(marker?.strokes.map(\.color) == [.yellow, .green])
+    }
+
+    @Test func addStrokeUsesTheSelectedBrushWidth() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.paintWidth = 0.02
+        model.addStroke(points: [CGPoint(x: 0.5, y: 0.5)])
+        #expect(model.selectedClip?.markers.first?.strokes.first?.width == 0.02)
+    }
+
+    @Test func addStrokeCarriesTheSelectedShapeKind() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.paintShape = .rectangle
+        model.addStroke(points: [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.8)])
+        #expect(model.selectedClip?.markers.first?.strokes.first?.kind == .rectangle)
+    }
+
+    @Test func undoRemovesOnlyTheLastStrokeAndClearRemovesAll() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.addStroke(points: [CGPoint(x: 0.1, y: 0.1)])
+        model.addStroke(points: [CGPoint(x: 0.2, y: 0.2)])
+        model.undoStroke()
+        #expect(model.selectedClip?.markers.first?.strokes.count == 1)
+        model.addStroke(points: [CGPoint(x: 0.3, y: 0.3)])
+        model.clearStrokes()
+        #expect(model.selectedClip?.markers.first?.strokes.isEmpty == true)
+    }
+
+    @Test func deleteSelectedStrokeRemovesOnlyThatStrokeAndClearsSelection() throws {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.addStroke(points: [CGPoint(x: 0.1, y: 0.1)])
+        model.addStroke(points: [CGPoint(x: 0.9, y: 0.9)])
+        let first = try #require(model.selectedClip?.markers.first?.strokes.first)
+
+        model.selectedStrokeID = first.id
+        model.deleteSelectedStroke()
+
+        let strokes = model.selectedClip?.markers.first?.strokes
+        #expect(strokes?.count == 1)
+        #expect(strokes?.first?.id != first.id)
+        #expect(model.selectedStrokeID == nil)
+    }
+
+    @Test func translateAndScaleApplyOnlyToTheSelectedStroke() throws {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.addStroke(points: [CGPoint(x: 0.2, y: 0.2)])
+        model.addStroke(points: [CGPoint(x: 0.6, y: 0.6)])
+        let second = try #require(model.selectedClip?.markers.first?.strokes.last)
+
+        model.selectedStrokeID = second.id
+        model.translateSelectedStroke(by: CGPoint(x: 0.1, y: 0.1))
+        model.scaleSelectedStroke(by: CGSize(width: 2, height: 2), anchor: CGPoint(x: 0.5, y: 0.5))
+
+        let strokes = model.selectedClip?.markers.first?.strokes
+        #expect(strokes?.first?.points.first == CGPoint(x: 0.2, y: 0.2))   // untouched
+        let moved = try #require(strokes?.last?.points.first)
+        // (0.6+0.1 − 0.5) × 2 + 0.5 = 0.9 on both axes
+        #expect(abs(moved.x - 0.9) < 1e-9 && abs(moved.y - 0.9) < 1e-9)
+    }
+
+    @Test func strokeEditOpsWithoutSelectionAreNoOps() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.addStroke(points: [CGPoint(x: 0.2, y: 0.2)])
+        model.deleteSelectedStroke()
+        model.translateSelectedStroke(by: CGPoint(x: 0.1, y: 0.1))
+        let strokes = model.selectedClip?.markers.first?.strokes
+        #expect(strokes?.count == 1)
+        #expect(strokes?.first?.points.first == CGPoint(x: 0.2, y: 0.2))
+    }
+
+    @Test func strokeOpsAwayFromAnyMarkerDoNothing() {
+        let model = modelWithClip()
+        model.currentTime = 1.5
+        model.toggleMarker()
+        model.currentTime = 5
+        model.undoStroke()    // must not crash, must not touch the marker at 1.5
+        model.clearStrokes()
+        #expect(model.selectedClip?.markers.count == 1)
+    }
+
     // MARK: - Frame handoff export
 
     @Test func exportMarkedFramesWithoutMarkersReportsError() {

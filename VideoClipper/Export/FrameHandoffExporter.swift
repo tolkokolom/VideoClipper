@@ -67,7 +67,8 @@ nonisolated enum FrameHandoffExporter {
                 throw FrameHandoffError.frameGenerationFailed(marker.time)
             }
             let scaled = downscale(cgImage, toFit: maxDimension)
-            let rep = NSBitmapImageRep(cgImage: scaled)
+            let painted = PaintRenderer.bake(strokes: marker.strokes, into: scaled)
+            let rep = NSBitmapImageRep(cgImage: painted)
             guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
                 throw FrameHandoffError.imageEncodingFailed
             }

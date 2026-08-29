@@ -20,11 +20,48 @@ enum ExportState {
     var exportedURL: URL? { if case .done(let url) = self { url } else { nil } }
 }
 
-/// A tagged frame for the handoff export: a point in time plus an optional note.
+/// Swatches for painting over a marked frame. RGB kept here as the single source
+/// for both the SwiftUI and CoreGraphics sides.
+enum PaintColor: CaseIterable, Sendable {
+    case red, yellow, green, white, black
+
+    nonisolated var rgb: (r: CGFloat, g: CGFloat, b: CGFloat) {
+        switch self {
+        case .red: (1.0, 0.23, 0.19)
+        case .yellow: (1.0, 0.8, 0.0)
+        case .green: (0.2, 0.84, 0.29)
+        case .white: (1.0, 1.0, 1.0)
+        case .black: (0.0, 0.0, 0.0)
+        }
+    }
+}
+
+/// How a stroke's points are interpreted: a freehand path, or a rectangle/ellipse
+/// spanned by two corner points.
+enum PaintShapeKind: CaseIterable, Sendable {
+    case freehand, rectangle, ellipse
+}
+
+/// One paint stroke over a marked frame. Points and width are normalized to the
+/// displayed (preview) frame, so they bake resolution-independently. Shapes carry
+/// exactly two points: the drag's start and end corners.
+struct PaintStroke: Identifiable, Sendable {
+    static let defaultWidth: CGFloat = 0.008
+
+    let id = UUID()
+    var kind: PaintShapeKind = .freehand
+    var points: [CGPoint]
+    var color: PaintColor
+    var width: CGFloat = defaultWidth
+}
+
+/// A tagged frame for the handoff export: a point in time plus an optional note
+/// and freehand paint strokes (baked into the exported image).
 struct FrameMarker: Identifiable {
     let id = UUID()
     var time: Double
     var note: String = ""
+    var strokes: [PaintStroke] = []
 }
 
 @Observable
