@@ -22,12 +22,17 @@ struct MainView: View {
     private let minimapSpring: Animation = .spring(response: 0.3, dampingFraction: 0.85)
 
     var body: some View {
-        VStack(spacing: 0) {
-            canvas
-            if let clip = model.selectedClip {
-                ControlsView(model: model, clip: clip)
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                canvas
+                if let clip = model.selectedClip {
+                    ControlsView(model: model, clip: clip)
+                }
+                FilmstripView(model: model)
             }
-            FilmstripView(model: model)
+            if model.activeTool == .marker, let clip = model.selectedClip {
+                MarkerPanel(model: model, clip: clip)
+            }
         }
         .background(.black)
         .dropDestination(for: URL.self) { urls, _ in
@@ -212,6 +217,10 @@ private struct ControlsView: View {
                 }
             }
 
+            if !clip.markers.isEmpty {
+                markerNoteLane
+            }
+
             TrimStrip(
                 thumbnails: clip.stripThumbnails,
                 duration: clip.duration,
@@ -220,7 +229,8 @@ private struct ControlsView: View {
                 trimStart: $clip.trimStart,
                 trimEnd: $clip.trimEnd,
                 playhead: model.currentTime,
-                onScrub: { model.seek(to: $0) }
+                markers: clip.markers.map(\.time),
+                onScrub: { model.scrub(to: $0) }
             )
             .frame(height: 44)
 
@@ -240,6 +250,12 @@ private struct ControlsView: View {
                 }
                 .help("Crop — drag the frame, resize from corners")
 
+                toolButton("Mark", systemImage: "bookmark", isActive: model.activeTool == .marker,
+                           hasEdit: !clip.markers.isEmpty, dotColor: .cyan) {
+                    model.toggleTool(.marker)
+                }
+                .help("Frame markers — M at the playhead; ⌘E copies frames for an agent")
+
                 Spacer()
 
                 if clip.exportState.isExporting {
@@ -251,6 +267,14 @@ private struct ControlsView: View {
                     if let exported = clip.exportState.exportedURL {
                         Button("Show Export in Finder") {
                             NSWorkspace.shared.activateFileViewerSelecting([exported])
+                        }
+                    }
+                    Divider()
+                    Button("Copy Frames for Agent") { model.exportMarkedFrames() }
+                        .disabled(clip.markers.isEmpty)
+                    if let folder = clip.frameExportState.exportedURL {
+                        Button("Show Frames in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([folder])
                         }
                     }
                 } label: {
@@ -286,13 +310,14 @@ private struct ControlsView: View {
         systemImage: String,
         isActive: Bool,
         hasEdit: Bool,
+        dotColor: Color = .yellow,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .overlay(alignment: .topTrailing) {
                     if hasEdit {
-                        Circle().fill(.yellow)
+                        Circle().fill(dotColor)
                             .frame(width: 6, height: 6)
                             .offset(x: 8, y: -4)
                     }
@@ -300,6 +325,36 @@ private struct ControlsView: View {
         }
         .buttonStyle(.bordered)
         .tint(isActive ? Color.accentColor : nil)
+    }
+
+    /// Thin lane above the strip: one pin per marker at its timeline position.
+    /// Hover highlights the marker's row in the side panel (and vice versa); click
+    /// shows the frame, opens the Mark tool, and focuses the note field.
+    private var markerNoteLane: some View {
+        GeometryReader { geo in
+            ForEach(clip.markers) { marker in
+                let fraction = marker.time / max(clip.duration, 0.001)
+                let x = min(max(CGFloat(fraction) * geo.size.width, 8), geo.size.width - 8)
+                let isHighlighted = model.highlightedMarkerID == marker.id
+                Image(systemName: "pin.fill")
+                    .font(.system(size: isHighlighted ? 12 : 9))
+                    .foregroundStyle(isHighlighted ? Color.white : .cyan)
+                    .frame(width: 14, height: 16)
+                    .contentShape(.rect)
+                    .position(x: x, y: 8)
+                    .onHover { hovering in
+                        if hovering {
+                            model.highlightedMarkerID = marker.id
+                        } else if model.highlightedMarkerID == marker.id {
+                            model.highlightedMarkerID = nil
+                        }
+                    }
+                    .onTapGesture { model.requestNoteFocus(marker) }
+                    .help(marker.note.isEmpty ? "Click to add a note" : marker.note)
+            }
+        }
+        .frame(height: 16)
+        .animation(.easeOut(duration: 0.12), value: model.highlightedMarkerID)
     }
 
     private func timeString(_ seconds: Double) -> String {

@@ -37,6 +37,9 @@ struct AppCommands: Commands {
             Button("Export As…") { model.exportSelected(chooseDestination: true) }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(model.selectedClip == nil)
+            Button("Copy Frames for Agent") { model.exportMarkedFrames() }
+                .keyboardShortcut("e")
+                .disabled(model.selectedClip?.markers.isEmpty ?? true)
         }
 
         CommandMenu("Clip") {
@@ -46,10 +49,23 @@ struct AppCommands: Commands {
             Divider()
             Button("Set Trim In") { model.setTrimIn() }
                 .keyboardShortcut("i", modifiers: [])
-                .disabled(model.selectedClip == nil)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
             Button("Set Trim Out") { model.setTrimOut() }
                 .keyboardShortcut("o", modifiers: [])
-                .disabled(model.selectedClip == nil)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
+            Divider()
+            Button("Mark Frame") { model.toggleMarker() }
+                .keyboardShortcut("m", modifiers: [])
+                .disabled(model.selectedClip == nil || model.isEditingNote)
+            Button("Edit Marker Note") { model.editNoteAtPlayhead() }
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled(model.selectedClip == nil || model.isEditingNote)
+            Button("Previous Marker") { model.jumpToMarker(offset: -1) }
+                .keyboardShortcut(.leftArrow, modifiers: .option)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
+            Button("Next Marker") { model.jumpToMarker(offset: 1) }
+                .keyboardShortcut(.rightArrow, modifiers: .option)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
             Divider()
             Button("Previous Clip") { model.selectNeighbor(offset: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
@@ -64,13 +80,13 @@ struct AppCommands: Commands {
         CommandMenu("Playback") {
             Button(model.isPlaying ? "Pause" : "Play") { model.togglePlay() }
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(model.selectedClip == nil)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
             Button("Step Backward") { model.stepFrame(by: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: [])
-                .disabled(model.selectedClip == nil)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
             Button("Step Forward") { model.stepFrame(by: 1) }
                 .keyboardShortcut(.rightArrow, modifiers: [])
-                .disabled(model.selectedClip == nil)
+                .disabled(model.selectedClip == nil || model.isEditingNote)
         }
     }
 }

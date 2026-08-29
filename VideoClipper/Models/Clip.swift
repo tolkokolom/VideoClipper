@@ -20,6 +20,13 @@ enum ExportState {
     var exportedURL: URL? { if case .done(let url) = self { url } else { nil } }
 }
 
+/// A tagged frame for the handoff export: a point in time plus an optional note.
+struct FrameMarker: Identifiable {
+    let id = UUID()
+    var time: Double
+    var note: String = ""
+}
+
 @Observable
 final class Clip: Identifiable {
     let id = UUID()
@@ -40,8 +47,11 @@ final class Clip: Identifiable {
     /// Normalized (0…1, top-left origin) in the displayed, post-rotation video.
     var cropRect = EditMath.identityCrop
     var cropAspect: CropAspect = .original
+    /// Sorted by time (AppModel.toggleMarker maintains the order).
+    var markers: [FrameMarker] = []
 
     var exportState: ExportState = .idle
+    var frameExportState: ExportState = .idle
 
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 

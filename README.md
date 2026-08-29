@@ -26,6 +26,20 @@ The preview always shows the staged result (crop/rotation applied via
 never overwriting). `⇧⌘S` opens a save panel. Pure rotations take a lossless
 passthrough fast-path (`.mov`, no re-encode). All AVFoundation — no FFmpeg.
 
+## Frame handoff (markers → coding agent)
+
+For handing a bug screenrecording to a coding agent: press `M` at the playhead
+to mark frames — cyan ticks on the strip, with a pin per marker in a lane above
+the timeline (hover shows the note and highlights the marker in the sidebar;
+click focuses its note field). The **Mark** tool (next to Crop) opens a right
+sidebar listing the markers vertically: jump, edit the optional note, remove.
+Then `⌘E` — "Copy Frames for Agent". That writes a `<name>-frames/`
+folder beside the video (downscaled JPEGs + a `frames.md` manifest with
+timestamps, deltas between frames, and notes) and puts the manifest with
+**absolute paths** on the clipboard, so one paste into Claude Code hands over
+the frames, the timing, and the commentary in one go. Staged crop/rotation
+applies to the exported frames; `⌥←` / `⌥→` jump between markers.
+
 ## Keyboard
 
 | Key | Action |
@@ -33,8 +47,11 @@ passthrough fast-path (`.mov`, no re-encode). All AVFoundation — no FFmpeg.
 | Space | Play / pause |
 | ← / → | Step one frame |
 | I / O | Set trim in / out |
+| M | Mark / unmark frame at playhead |
+| ⌥← / ⌥→ | Previous / next marker |
 | ⌘R | Rotate 90° |
 | ⌘S / ⇧⌘S | Export / Export As… |
+| ⌘E | Copy Frames for Agent |
 | ⌘← / ⌘→ | Previous / next clip |
 | ⌘⌫ | Remove clip from bin |
 | ⌘O | Open videos |

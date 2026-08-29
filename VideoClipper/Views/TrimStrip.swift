@@ -16,6 +16,8 @@ struct TrimStrip: View {
     @Binding var trimStart: Double
     @Binding var trimEnd: Double
     let playhead: Double
+    /// Times of the clip's frame markers — rendered as passive cyan ticks.
+    let markers: [Double]
     let onScrub: (Double) -> Void
 
     private let handleWidth: CGFloat = 14
@@ -76,6 +78,17 @@ struct TrimStrip: View {
                         handle(.gray).offset(x: startX - handleWidth / 2).allowsHitTesting(false)
                         handle(.gray).offset(x: endX - handleWidth / 2).allowsHitTesting(false)
                     }
+                }
+
+                // Marker ticks: passive (jump with ⌥←/⌥→ or the chips row), so the
+                // strip still scrubs underneath them.
+                ForEach(Array(markers.enumerated()), id: \.offset) { _, time in
+                    let x = min(max(CGFloat(time / max(duration, 0.001)) * width, 0), width)
+                    UnevenRoundedRectangle(bottomLeadingRadius: 2, bottomTrailingRadius: 2)
+                        .fill(.cyan)
+                        .frame(width: 3, height: 12)
+                        .offset(x: x - 1.5, y: -height / 2 + 6)
+                        .allowsHitTesting(false)
                 }
 
                 // Playhead line (both modes); a grab knob in scrub mode.

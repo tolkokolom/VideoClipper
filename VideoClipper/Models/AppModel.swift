@@ -20,13 +20,29 @@ final class AppModel {
     var isPlaying = false
     var currentTime: Double = 0
     var errorMessage: String?
+    /// True while a marker note field has focus — bare-key menu shortcuts
+    /// (I/O/M/space/arrows) disable themselves so typing isn't hijacked.
+    var isEditingNote = false
+    /// Marker hovered in the timeline lane or the panel — the counterpart highlights.
+    var highlightedMarkerID: FrameMarker.ID?
+    /// One-shot request (consumed by MarkerPanel) to focus a marker's note field.
+    var noteFocusRequest: FrameMarker.ID?
+    /// Bumped when video interaction (scrub, play) should drop note-field focus, so
+    /// M works right after scrubbing without pressing Enter first. MarkerPanel listens.
+    private(set) var noteBlurSignal = 0
+
+    /// Drops note-field focus if a note is being edited.
+    func endNoteEditing() {
+        guard isEditingNote else { return }
+        noteBlurSignal += 1
+    }
 
     @ObservationIgnored let player = AVPlayer()
     @ObservationIgnored private var timeObserver: Any?
     /// Guards async preview-composition application against clip switches mid-await.
     @ObservationIgnored private var previewGeneration = 0
 
-    enum Tool { case trim, crop }
+    enum Tool { case trim, crop, marker }
 
     let minTrim: Double = 1
 
@@ -125,8 +141,16 @@ final class AppModel {
         }
     }
 
+    /// Strip drag: like seek, but also ends note editing — the user has moved on to
+    /// navigating the video, and M should mark again without an Enter first.
+    func scrub(to seconds: Double) {
+        endNoteEditing()
+        seek(to: seconds)
+    }
+
     func togglePlay() {
         guard let clip = selectedClip else { return }
+        endNoteEditing()
         if player.rate > 0 {
             player.pause()
             isPlaying = false
@@ -158,6 +182,53 @@ final class AppModel {
         isPlaying = false
         item.step(byCount: count)
         currentTime = item.currentTime().seconds
+    }
+
+    // MARK: - Frame markers
+
+    /// Times within this window count as the same frame when toggling — well under one
+    /// frame even at 60 fps, so markers on adjacent stepped frames never collide.
+    private let markerEpsilon = 0.01
+
+    /// Adds a marker at the playhead, or removes the one already sitting there.
+    func toggleMarker() {
+        guard let clip = selectedClip else { return }
+        if let index = clip.markers.firstIndex(where: { abs($0.time - currentTime) < markerEpsilon }) {
+            clip.markers.remove(at: index)
+        } else {
+            clip.markers.append(FrameMarker(time: currentTime))
+            clip.markers.sort { $0.time < $1.time }
+        }
+    }
+
+    /// Timeline pin clicked: show that frame, open the Mark tool, and ask the panel
+    /// to put the cursor into the marker's note field.
+    func requestNoteFocus(_ marker: FrameMarker) {
+        seek(to: marker.time)
+        if activeTool != .marker {
+            activeTool = .marker
+            applyPreviewComposition()   // leaving Crop must restore the staged preview
+        }
+        noteFocusRequest = marker.id
+    }
+
+    /// Return pressed outside a text field: edit the note of the marker under the
+    /// playhead (the natural follow-up to M, which leaves the playhead on it).
+    func editNoteAtPlayhead() {
+        guard let clip = selectedClip,
+              let marker = clip.markers.first(where: { abs($0.time - currentTime) < markerEpsilon })
+        else { return }
+        requestNoteFocus(marker)
+    }
+
+    /// Seeks to the next (+1) or previous (-1) marker; stays put past the ends.
+    func jumpToMarker(offset: Int) {
+        guard let clip = selectedClip else { return }
+        let times = clip.markers.map(\.time)
+        let target = offset > 0
+            ? times.first(where: { $0 > currentTime + markerEpsilon })
+            : times.last(where: { $0 < currentTime - markerEpsilon })
+        if let target { seek(to: target) }
     }
 
     // MARK: - Tools
@@ -267,6 +338,38 @@ final class AppModel {
             } catch {
                 clip.exportState = .failed(error.localizedDescription)
                 self.errorMessage = "Couldn't export: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Injectable for tests, so a test run never clobbers the real clipboard.
+    @ObservationIgnored var writeClipboard: (String) -> Void = { text in
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Exports the marked frames as a handoff folder and puts the absolute-path
+    /// manifest on the clipboard — ready to ⌘V into a coding agent.
+    func exportMarkedFrames() {
+        guard let clip = selectedClip, clip.isLoaded, !clip.frameExportState.isExporting else { return }
+        guard !clip.markers.isEmpty else {
+            errorMessage = "No frames marked — press M at the playhead first."
+            return
+        }
+        clip.frameExportState = .exporting
+        let markers = clip.markers
+        let quarters = clip.rotationQuarters
+        let crop = clip.isCropped ? clip.cropRect : nil
+        Task {
+            do {
+                let result = try await FrameHandoffExporter.export(
+                    sourceURL: clip.url, markers: markers, rotationQuarters: quarters, cropRect: crop)
+                self.writeClipboard(result.clipboardText)
+                clip.frameExportState = .done(result.folder)
+            } catch {
+                clip.frameExportState = .failed(error.localizedDescription)
+                self.errorMessage = "Couldn't export frames: \(error.localizedDescription)"
             }
         }
     }
