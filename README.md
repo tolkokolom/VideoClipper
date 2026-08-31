@@ -1,7 +1,14 @@
 # VideoClipper
 
-Native macOS app for basic, fast video editing — ClipShot's editing tools
-(trim / crop / rotate) ported to the Mac with drag-and-drop and file export.
+Native macOS app for basic, fast video editing — trim / crop / rotate with
+drag-and-drop and file export — plus a **frame handoff** workflow for bug
+reports to coding agents: mark frames of a screen recording, annotate them
+(notes, freehand/shape paint), and `⌘E` copies a ready-to-paste manifest with
+downscaled frames for Claude Code or any agent that can read local files.
+
+Pure SwiftUI + AVFoundation, no FFmpeg. Requires macOS 15 and Xcode 16;
+building needs [xcodegen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`). MIT licensed.
 
 ## Layout
 
