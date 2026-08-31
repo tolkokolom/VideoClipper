@@ -63,7 +63,15 @@ struct MarkerPanel: View {
         .frame(width: 250)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
-        .onChange(of: focusedNote) { model.isEditingNote = focusedNote != nil }
+        .onChange(of: focusedNote) {
+            model.isEditingNote = focusedNote != nil
+            // Editing a marker's note brings the playhead onto its frame.
+            if let id = focusedNote,
+               let marker = clip.markers.first(where: { $0.id == id }),
+               model.markerAtPlayhead?.id != id {
+                model.seek(to: marker.time)
+            }
+        }
         .onDisappear { model.isEditingNote = false }
         .onAppear { consumeFocusRequest() }
         .onChange(of: model.noteFocusRequest) { consumeFocusRequest() }
@@ -210,6 +218,9 @@ struct MarkerPanel: View {
                 model.highlightedMarkerID = nil
             }
         }
+        // Clicking anywhere on the card (its controls aside) shows that frame.
+        .contentShape(.rect)
+        .onTapGesture { model.seek(to: marker.wrappedValue.time) }
     }
 
     /// A timeline pin was clicked: put the cursor into that marker's note field.
