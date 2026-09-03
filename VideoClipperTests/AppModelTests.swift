@@ -475,6 +475,174 @@ struct AppModelTests {
         #expect(model.masterDuration == 13)
     }
 
+    // MARK: - Undo / redo
+
+    @Test func undoAndRedoWalkEditsInOrder() {
+        let model = modelWithClip()
+        model.selectedClip?.trimEnd = 10
+        model.currentTime = 2
+        model.toggleMarker()
+        model.currentTime = 5
+        model.setTrimIn()
+        #expect(model.selectedClip?.trimStart == 5)
+
+        model.undo()   // trim back
+        #expect(model.selectedClip?.trimStart == 0)
+        #expect(model.selectedClip?.markers.count == 1)
+        model.undo()   // marker back off
+        #expect(model.selectedClip?.markers.isEmpty == true)
+        #expect(model.canUndo == false)
+
+        model.redo()
+        #expect(model.selectedClip?.markers.count == 1)
+        model.redo()
+        #expect(model.selectedClip?.trimStart == 5)
+        #expect(model.canRedo == false)
+    }
+
+    @Test func aNewEditClearsTheRedoStack() {
+        let model = modelWithClip()
+        model.selectedClip?.trimEnd = 10
+        model.currentTime = 3
+        model.setTrimIn()
+        model.undo()
+        #expect(model.canRedo)
+        model.currentTime = 4
+        model.setTrimIn()
+        #expect(model.canRedo == false)
+        #expect(model.selectedClip?.trimStart == 4)
+    }
+
+    @Test func undoHistoryIsPerClip() {
+        let model = AppModel()
+        model.addClips(urls: [url("a"), url("b")])   // focuses a
+        model.selectedClip?.duration = 10
+        model.currentTime = 1
+        model.toggleMarker()
+        #expect(model.canUndo)
+
+        model.select(model.clips[1])
+        #expect(model.canUndo == false)
+        model.undo()   // must be a no-op on b
+        #expect(model.clips[0].markers.count == 1)
+
+        model.select(model.clips[0])
+        model.undo()
+        #expect(model.clips[0].markers.isEmpty == true)
+    }
+
+    @Test func aDragRecordsOnceAndUndoesAsOneStep() throws {
+        let model = timelineModel()
+        model.activeTool = .timeline
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.recordUndo()                              // drag start
+        model.setLayerStart(layer.id, seconds: 1)       // drag ticks
+        model.setLayerStart(layer.id, seconds: 2)
+        model.setLayerStart(layer.id, seconds: 3)
+        #expect(model.selectedClip?.timelineLayers.first?.start == 3)
+        model.undo()
+        #expect(model.selectedClip?.timelineLayers.first?.start == 0)
+    }
+
+    @Test func undoClearsStaleLayerSelection() throws {
+        let model = timelineModel()
+        model.activeTool = .timeline
+        let original = try #require(model.selectedClip?.timelineLayers.first)
+        model.duplicateLayer(original.id)               // records; selects the copy
+        model.undo()
+        #expect(model.selectedClip?.timelineLayers.count == 1)
+        #expect(model.selectedLayerID == nil)
+    }
+
+    // MARK: - Move snapping
+
+    @Test func movingALayerSnapsToOtherLayersEdgesAndThePlayhead() throws {
+        let model = timelineModel()
+        model.activeTool = .timeline
+        let anchor = try #require(model.selectedClip?.timelineLayers.first)
+        model.trimLayer(anchor.id, sourceIn: 1, sourceOut: 3)   // 2 s long
+        model.setLayerStart(anchor.id, seconds: 5)              // spans 5…7
+        model.duplicateLayer(anchor.id)                         // copy at 5…7, selected
+        let copy = try #require(model.selectedClip?.timelineLayers.last)
+
+        // Start snaps to the anchor's end (7) from just under it.
+        model.setLayerStart(copy.id, seconds: 6.95, snapTolerance: 0.1)
+        #expect(model.selectedClip?.timelineLayers.last?.start == 7)
+
+        // End snaps to the anchor's start (5): start = 5 − length.
+        model.setLayerStart(copy.id, seconds: 3.05, snapTolerance: 0.1)
+        #expect(model.selectedClip?.timelineLayers.last?.start == 3)
+
+        // Outside the tolerance nothing sticks.
+        model.setLayerStart(copy.id, seconds: 6.7, snapTolerance: 0.1)
+        #expect(model.selectedClip?.timelineLayers.last?.start == 6.7)
+
+        // The playhead is a snap target too.
+        model.currentTime = 1.0
+        model.setLayerStart(copy.id, seconds: 0.93, snapTolerance: 0.1)
+        #expect(model.selectedClip?.timelineLayers.last?.start == 1.0)
+    }
+
+    // MARK: - Work area
+
+    @Test func workAreaBoundsDeriveLiveFromTheLayers() throws {
+        let model = timelineModel()                     // layer in 1…9 at start 0
+        model.activeTool = .timeline
+        #expect(model.workAreaBounds == nil)            // off by default
+
+        model.workAreaEnabled = true
+        var bounds = try #require(model.workAreaBounds)
+        #expect(bounds.start == 0 && bounds.end == 8)
+
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: 2)       // edits auto-apply
+        bounds = try #require(model.workAreaBounds)
+        #expect(bounds.start == 2 && bounds.end == 10)
+
+        model.activeTool = nil                          // only meaningful in timeline mode
+        #expect(model.workAreaBounds == nil)
+    }
+
+    @Test func togglePlayRestartsInsideTheWorkArea() throws {
+        let model = timelineModel()
+        model.activeTool = .timeline
+        model.workAreaEnabled = true
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: 2)       // work area 2…10
+
+        model.player.pause()                            // select() had started playback
+        model.currentTime = 11                          // past the out bound
+        model.togglePlay()
+        #expect(model.currentTime == 2)
+
+        model.player.pause()
+        model.currentTime = 1                           // before the in bound
+        model.togglePlay()
+        #expect(model.currentTime == 2)
+    }
+
+    // MARK: - Trim selected layer to playhead
+
+    @Test func playheadTrimButtonsEditTheSelectedLayerInMasterTime() throws {
+        let model = timelineModel()                     // layer in 1…9 at start 0
+        model.activeTool = .timeline
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: 2)       // start 2, end 10
+
+        model.currentTime = 4
+        model.trimSelectedLayerInToPlayhead()
+        var updated = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(updated.sourceIn == 3)                  // 1 + (4 − 2)
+        #expect(updated.start == 4)
+        #expect(abs(updated.end - 10) < 1e-9)           // out edge fixed in master time
+
+        model.currentTime = 6
+        model.trimSelectedLayerOutToPlayhead()
+        updated = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(updated.sourceOut == 5)                 // 3 + (6 − 4)
+        #expect(abs(updated.end - 6) < 1e-9)            // layer now ends at the playhead
+    }
+
     // MARK: - Frame handoff export
 
     @Test func exportMarkedFramesWithoutMarkersReportsError() {

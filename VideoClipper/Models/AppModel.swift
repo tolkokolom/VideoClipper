@@ -33,7 +33,26 @@ final class AppModel {
 
     /// Timeline mode: the layer selected for editing.
     var selectedLayerID: TimelineLayer.ID?
-    let minLayerLength = 0.2
+    /// Roughly one frame — the floor only guards against a degenerate
+    /// zero-length layer; picking tiny segments is what the timeline zoom is for.
+    let minLayerLength = 0.02
+    /// Work area toggle: playback confined between the layers' first in point
+    /// and last out point.
+    var workAreaEnabled = false
+
+    /// Live-derived work area (first in, last out of the layers), so layer edits
+    /// auto-apply; nil when disabled, outside Timeline mode, or with no layers.
+    var workAreaBounds: (start: Double, end: Double)? {
+        guard workAreaEnabled, activeTool == .timeline, let clip = selectedClip else { return nil }
+        return Self.layerSpan(of: clip)
+    }
+
+    /// First in / last out of the clip's layers.
+    private static func layerSpan(of clip: Clip) -> (start: Double, end: Double)? {
+        guard !clip.timelineLayers.isEmpty else { return nil }
+        return (clip.timelineLayers.map(\.start).min() ?? 0,
+                clip.timelineLayers.map(\.end).max() ?? 0)
+    }
 
     /// Drops note-field focus if a note is being edited.
     func endNoteEditing() {
@@ -146,6 +165,11 @@ final class AppModel {
             player.pause()
             isPlaying = false
         }
+        // The work area pauses composed playback at its out bound.
+        if let bounds = workAreaBounds, isPlaying, seconds >= bounds.end {
+            player.pause()
+            isPlaying = false
+        }
     }
 
     /// Strip drag: like seek, but also ends note editing — the user has moved on to
@@ -165,8 +189,13 @@ final class AppModel {
         }
         // Restart inside the trimmed range when the playhead sits at/past the end.
         if activeTool == .timeline {
-            let end = player.currentItem?.duration.seconds ?? 0
-            if end > 0, currentTime >= end - 0.05 { seek(to: 0) }
+            if let bounds = workAreaBounds,
+               currentTime >= bounds.end - 0.05 || currentTime < bounds.start {
+                seek(to: bounds.start)
+            } else {
+                let end = player.currentItem?.duration.seconds ?? 0
+                if end > 0, currentTime >= end - 0.05 { seek(to: 0) }
+            }
         } else if currentTime >= clip.trimEnd - 0.05 || currentTime < clip.trimStart {
             seek(to: clip.trimStart)
         }
@@ -194,6 +223,55 @@ final class AppModel {
         currentTime = item.currentTime().seconds
     }
 
+    // MARK: - Undo history
+
+    private let undoDepthLimit = 50
+
+    /// Pushes the clip's staged-edit state onto its undo stack — one call per
+    /// discrete action, or per drag gesture (views call this when a drag first
+    /// takes effect, so a whole drag undoes as one step). A new edit clears redo.
+    func recordUndo() {
+        guard let clip = selectedClip else { return }
+        clip.undoStack.append(clip.editSnapshot())
+        if clip.undoStack.count > undoDepthLimit {
+            clip.undoStack.removeFirst()
+        }
+        clip.redoStack.removeAll()
+    }
+
+    var canUndo: Bool { selectedClip?.undoStack.isEmpty == false }
+    var canRedo: Bool { selectedClip?.redoStack.isEmpty == false }
+
+    func undo() {
+        guard let clip = selectedClip, let snapshot = clip.undoStack.popLast() else { return }
+        clip.redoStack.append(clip.editSnapshot())
+        clip.restore(snapshot)
+        settleAfterHistoryStep(clip)
+    }
+
+    func redo() {
+        guard let clip = selectedClip, let snapshot = clip.redoStack.popLast() else { return }
+        clip.undoStack.append(clip.editSnapshot())
+        clip.restore(snapshot)
+        settleAfterHistoryStep(clip)
+    }
+
+    /// Selection hygiene + preview refresh after restoring a snapshot.
+    private func settleAfterHistoryStep(_ clip: Clip) {
+        if let id = selectedLayerID, !clip.timelineLayers.contains(where: { $0.id == id }) {
+            selectedLayerID = nil
+        }
+        if let id = selectedStrokeID,
+           !clip.markers.contains(where: { $0.strokes.contains { $0.id == id } }) {
+            selectedStrokeID = nil
+        }
+        if activeTool == .timeline {
+            refreshTimelinePreview()
+        } else {
+            applyPreviewComposition()
+        }
+    }
+
     // MARK: - Frame markers
 
     /// Times within this window count as the same frame when toggling — well under one
@@ -215,12 +293,17 @@ final class AppModel {
     /// instant.
     func toggleMarker() {
         guard activeTool != .timeline, let clip = selectedClip else { return }
+        recordUndo()
         if let index = markerIndexAtPlayhead {
             clip.markers.remove(at: index)
         } else {
-            clip.markers.append(FrameMarker(time: currentTime))
-            clip.markers.sort { $0.time < $1.time }
+            insertMarkerAtPlayhead(clip)
         }
+    }
+
+    private func insertMarkerAtPlayhead(_ clip: Clip) {
+        clip.markers.append(FrameMarker(time: currentTime))
+        clip.markers.sort { $0.time < $1.time }
     }
 
     // MARK: - Paint
@@ -241,8 +324,9 @@ final class AppModel {
     /// marking the frame first when it isn't marked yet — drawing implies marking.
     func addStroke(points: [CGPoint]) {
         guard let clip = selectedClip, !points.isEmpty else { return }
+        recordUndo()
         if markerIndexAtPlayhead == nil {
-            toggleMarker()
+            insertMarkerAtPlayhead(clip)   // one undo step covers mark + stroke
         }
         guard let index = markerIndexAtPlayhead else { return }
         clip.markers[index].strokes.append(
@@ -253,12 +337,15 @@ final class AppModel {
     func undoStroke() {
         guard let clip = selectedClip, let index = markerIndexAtPlayhead,
               !clip.markers[index].strokes.isEmpty else { return }
+        recordUndo()
         clip.markers[index].strokes.removeLast()
     }
 
     /// Removes every stroke of the marker under the playhead.
     func clearStrokes() {
-        guard let clip = selectedClip, let index = markerIndexAtPlayhead else { return }
+        guard let clip = selectedClip, let index = markerIndexAtPlayhead,
+              !clip.markers[index].strokes.isEmpty else { return }
+        recordUndo()
         clip.markers[index].strokes.removeAll()
         selectedStrokeID = nil
     }
@@ -275,6 +362,7 @@ final class AppModel {
 
     func deleteSelectedStroke() {
         guard let clip = selectedClip, let location = selectedStrokeLocation else { return }
+        recordUndo()
         clip.markers[location.marker].strokes.remove(at: location.stroke)
         selectedStrokeID = nil
     }
@@ -363,6 +451,7 @@ final class AppModel {
 
     func duplicateLayer(_ id: TimelineLayer.ID) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        recordUndo()
         let source = clip.timelineLayers[index]
         let copy = TimelineLayer(
             sourceIn: source.sourceIn, sourceOut: source.sourceOut,
@@ -374,6 +463,7 @@ final class AppModel {
 
     func deleteLayer(_ id: TimelineLayer.ID) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        recordUndo()
         clip.timelineLayers.remove(at: index)
         if selectedLayerID == id { selectedLayerID = nil }
         refreshTimelinePreview()
@@ -400,6 +490,37 @@ final class AppModel {
         guard abs(newStart - clip.timelineLayers[index].start) > 1e-9 else { return }
         clip.timelineLayers[index].start = newStart
         refreshTimelinePreview()
+    }
+
+    /// Move with edge snapping: within `snapTolerance` seconds, the dragged
+    /// layer's start or end (whichever lands closer) sticks to another layer's
+    /// edge, the timeline origin, or the playhead.
+    func setLayerStart(_ id: TimelineLayer.ID, seconds: Double, snapTolerance: Double) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        let layer = clip.timelineLayers[index]
+        let length = layer.sourceOut - layer.sourceIn
+        let desired = max(0, seconds)
+
+        var candidates: [Double] = [0, currentTime]
+        for (otherIndex, other) in clip.timelineLayers.enumerated() where otherIndex != index {
+            candidates.append(other.start)
+            candidates.append(other.end)
+        }
+
+        var best = desired
+        var bestDistance = snapTolerance
+        for candidate in candidates {
+            // candidate = where the START would stick; candidate − length = where
+            // the START goes for the END to stick.
+            for aligned in [candidate, candidate - length] where aligned >= 0 {
+                let distance = abs(aligned - desired)
+                if distance < bestDistance {
+                    best = aligned
+                    bestDistance = distance
+                }
+            }
+        }
+        setLayerStart(id, seconds: best)
     }
 
     /// Pass nil to leave an edge untouched. Clamped to media bounds and the
@@ -443,10 +564,28 @@ final class AppModel {
         refreshTimelinePreview()
     }
 
+    /// [ riding the timeline playhead: the selected layer's visible content
+    /// starts at the playhead (leading-edge trim, master-time math).
+    func trimSelectedLayerInToPlayhead() {
+        guard activeTool == .timeline, let clip = selectedClip, let id = selectedLayerID,
+              let layer = clip.timelineLayers.first(where: { $0.id == id }) else { return }
+        recordUndo()
+        trimLayerLeadingEdge(id, sourceIn: layer.sourceIn + (currentTime - layer.start))
+    }
+
+    /// ] riding the timeline playhead: the selected layer ends at the playhead.
+    func trimSelectedLayerOutToPlayhead() {
+        guard activeTool == .timeline, let clip = selectedClip, let id = selectedLayerID,
+              let layer = clip.timelineLayers.first(where: { $0.id == id }) else { return }
+        recordUndo()
+        trimLayer(id, sourceIn: nil, sourceOut: layer.sourceIn + (currentTime - layer.start))
+    }
+
     /// Flips direction and mirrors the trim window (in,out → D−out,D−in) so the
     /// same content stays selected — AE time-reverse semantics.
     func toggleReverse(_ id: TimelineLayer.ID) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        recordUndo()
         var layer = clip.timelineLayers[index]
         toggleMirror(&layer, duration: clip.duration)
         clip.timelineLayers[index] = layer
@@ -558,6 +697,7 @@ final class AppModel {
 
     func rotate() {
         guard let clip = selectedClip else { return }
+        recordUndo()
         player.pause()   // rotate against the current still frame, not mid-playback
         isPlaying = false
         clip.rotationSteps += 1
@@ -573,17 +713,24 @@ final class AppModel {
     /// No-op in Timeline mode — see `toggleMarker`.
     func setTrimIn() {
         guard activeTool != .timeline, let clip = selectedClip else { return }
-        clip.trimStart = max(0, min(currentTime, clip.trimEnd - minTrim))
+        let value = max(0, min(currentTime, clip.trimEnd - minTrim))
+        guard abs(value - clip.trimStart) > 1e-9 else { return }
+        recordUndo()
+        clip.trimStart = value
     }
 
     /// No-op in Timeline mode — see `toggleMarker`.
     func setTrimOut() {
         guard activeTool != .timeline, let clip = selectedClip else { return }
-        clip.trimEnd = min(clip.duration, max(currentTime, clip.trimStart + minTrim))
+        let value = min(clip.duration, max(currentTime, clip.trimStart + minTrim))
+        guard abs(value - clip.trimEnd) > 1e-9 else { return }
+        recordUndo()
+        clip.trimEnd = value
     }
 
     func setCropAspect(_ aspect: CropAspect) {
         guard let clip = selectedClip else { return }
+        recordUndo()
         clip.cropAspect = aspect
         clip.cropRect = Self.fittedCrop(aspect: aspect, in: clip)
     }
@@ -661,17 +808,20 @@ final class AppModel {
     }
 
     /// Timeline export: same destination conventions as the single-clip path.
+    /// With the work area on, only its window (first in … last out) exports —
+    /// notably skipping any leading black before the first layer.
     private func exportTimeline(_ clip: Clip, chooseDestination: Bool) {
         clip.exportState = .exporting
         let layers = clip.timelineLayers
         let reversedURL = clip.reversedAsset.readyURL
         let quarters = clip.rotationQuarters
         let crop = clip.isCropped ? clip.cropRect : nil
+        let range = workAreaEnabled ? Self.layerSpan(of: clip) : nil
         Task {
             do {
                 let temp = try await TimelineComposer.export(
                     layers: layers, sourceURL: clip.url, reversedURL: reversedURL,
-                    rotationQuarters: quarters, cropRect: crop)
+                    rotationQuarters: quarters, cropRect: crop, range: range)
                 guard let destination = self.resolveDestination(
                     for: clip, produced: temp, choose: chooseDestination) else {
                     try? FileManager.default.removeItem(at: temp)

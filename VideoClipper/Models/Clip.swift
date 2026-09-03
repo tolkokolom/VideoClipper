@@ -64,6 +64,19 @@ struct FrameMarker: Identifiable {
     var strokes: [PaintStroke] = []
 }
 
+/// One undo step: the complete staged-edit state of a clip. Snapshot-based so a
+/// single mechanism covers trim, rotation, crop, markers+paint, and timeline
+/// layers alike.
+struct EditSnapshot {
+    var trimStart: Double
+    var trimEnd: Double
+    var rotationSteps: Int
+    var cropRect: CGRect
+    var cropAspect: CropAspect
+    var markers: [FrameMarker]
+    var timelineLayers: [TimelineLayer]
+}
+
 @Observable
 final class Clip: Identifiable {
     let id = UUID()
@@ -94,6 +107,27 @@ final class Clip: Identifiable {
 
     var exportState: ExportState = .idle
     var frameExportState: ExportState = .idle
+
+    /// Per-clip edit history (AppModel.recordUndo/undo/redo drive these).
+    var undoStack: [EditSnapshot] = []
+    var redoStack: [EditSnapshot] = []
+
+    func editSnapshot() -> EditSnapshot {
+        EditSnapshot(
+            trimStart: trimStart, trimEnd: trimEnd, rotationSteps: rotationSteps,
+            cropRect: cropRect, cropAspect: cropAspect,
+            markers: markers, timelineLayers: timelineLayers)
+    }
+
+    func restore(_ snapshot: EditSnapshot) {
+        trimStart = snapshot.trimStart
+        trimEnd = snapshot.trimEnd
+        rotationSteps = snapshot.rotationSteps
+        cropRect = snapshot.cropRect
+        cropAspect = snapshot.cropAspect
+        markers = snapshot.markers
+        timelineLayers = snapshot.timelineLayers
+    }
 
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 

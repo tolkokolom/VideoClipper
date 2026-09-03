@@ -16,6 +16,9 @@ struct CropOverlay: View {
     /// Locked aspect (w/h) in real display proportions.
     let aspect: CGFloat
     @Binding var cropRect: CGRect
+    /// Fired once per move/resize drag, before its first change — the undo hook
+    /// (crop drags mutate the binding directly).
+    var onEditBegan: () -> Void = {}
 
     /// Crop at gesture start, in display coordinates; nil when no drag is running.
     @State private var dragStart: CGRect?
@@ -89,6 +92,7 @@ struct CropOverlay: View {
     private var moveGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                if dragStart == nil { onEditBegan() }
                 let start = dragStart ?? displayCrop
                 dragStart = start
                 var moved = start.offsetBy(dx: value.translation.width, dy: value.translation.height)
@@ -130,6 +134,7 @@ struct CropOverlay: View {
     private func resizeGesture(corner: Corner) -> some Gesture {
         DragGesture(coordinateSpace: .local)
             .onChanged { value in
+                if dragStart == nil { onEditBegan() }
                 let start = dragStart ?? displayCrop
                 dragStart = start
                 let anchor = corner.anchor(of: start)

@@ -56,11 +56,19 @@ applies to the exported frames; `⌥←` / `⌥→` jump between markers.
 
 ## Timeline mode
 
+`⌘Z` / `⇧⌘Z` undo and redo every staged edit — trim, rotate, crop, markers,
+paint, and timeline layers — with one step per action or drag, per clip.
+
 The **Timeline** tool stacks full-frame layers of the current clip, AE-style:
 duplicate a layer, reverse it (pre-rendered in the background), trim each
-layer's window, drag it along the master timeline, and drag rows vertically to
-change who's on top — during overlaps the topmost layer plays. The composed
-result previews live and `⌘S` exports it as a single silent video.
+layer's window (visible edge handles on the selected bar; trimming follows
+with the playhead), drag it along the master timeline (with edge snapping to
+other layers, the origin, and the playhead), and drag rows vertically to
+change who's on top — during overlaps the topmost layer plays. `[` / `]` ride
+the playhead to trim the selected layer to it, the timeline zooms up to 16×
+for frame-level work, and a toggleable **work area** (auto-fit to first
+in / last out) confines playback — and `⌘S` — to just that window. The
+composed result previews live and exports as a single silent video.
 
 ## Keyboard
 

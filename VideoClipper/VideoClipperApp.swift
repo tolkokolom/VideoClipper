@@ -3,6 +3,7 @@
 //  VideoClipper
 //
 
+import AppKit
 import SwiftUI
 
 @main
@@ -25,6 +26,29 @@ struct AppCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
+        CommandGroup(replacing: .undoRedo) {
+            // While a note field has focus, ⌘Z belongs to the text system —
+            // forward to the responder chain instead of the edit history.
+            Button("Undo") {
+                if model.isEditingNote {
+                    NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+                } else {
+                    model.undo()
+                }
+            }
+            .keyboardShortcut("z")
+            .disabled(!model.isEditingNote && !model.canUndo)
+            Button("Redo") {
+                if model.isEditingNote {
+                    NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+                } else {
+                    model.redo()
+                }
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!model.isEditingNote && !model.canRedo)
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("Open Videos…") { model.openFiles() }
                 .keyboardShortcut("o")

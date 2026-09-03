@@ -19,6 +19,10 @@ struct TrimStrip: View {
     /// Times of the clip's frame markers — rendered as passive cyan ticks.
     let markers: [Double]
     let onScrub: (Double) -> Void
+    /// Fired once per handle drag, just before its first real change — the undo
+    /// hook (handle drags mutate the trim bindings directly).
+    let onTrimEditBegan: () -> Void
+    @State private var trimDragRecorded = false
 
     private let handleWidth: CGFloat = 14
     private let space = "trimStrip"
@@ -142,13 +146,25 @@ struct TrimStrip: View {
                 let fraction = min(max(value.location.x / width, 0), 1)
                 let time = Double(fraction) * duration
                 if isStart {
-                    trimStart = max(0, min(time, trimEnd - minTrim))
+                    let clamped = max(0, min(time, trimEnd - minTrim))
+                    recordIfChanging(from: trimStart, to: clamped)
+                    trimStart = clamped
                     onScrub(trimStart)
                 } else {
-                    trimEnd = min(duration, max(time, trimStart + minTrim))
+                    let clamped = min(duration, max(time, trimStart + minTrim))
+                    recordIfChanging(from: trimEnd, to: clamped)
+                    trimEnd = clamped
                     onScrub(trimEnd)
                 }
             }
+            .onEnded { _ in trimDragRecorded = false }
+    }
+
+    /// Undo hook: fire once per drag, only when the handle actually moves the value.
+    private func recordIfChanging(from old: Double, to new: Double) {
+        guard !trimDragRecorded, abs(new - old) > 0.001 else { return }
+        onTrimEditBegan()
+        trimDragRecorded = true
     }
 }
 

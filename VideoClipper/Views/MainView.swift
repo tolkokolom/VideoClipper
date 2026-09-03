@@ -100,7 +100,8 @@ struct MainView: View {
                         CropOverlay(
                             videoRect: EditMath.fit(aspect: clip.rotatedAspect, in: geo.size),
                             aspect: clip.cropAspect.ratio ?? clip.rotatedAspect,
-                            cropRect: Bindable(clip).cropRect
+                            cropRect: Bindable(clip).cropRect,
+                            onEditBegan: { model.recordUndo() }
                         )
                     }
                     if model.activeTool == .marker {
@@ -248,7 +249,8 @@ private struct ControlsView: View {
                     trimEnd: $clip.trimEnd,
                     playhead: model.currentTime,
                     markers: clip.markers.map(\.time),
-                    onScrub: { model.scrub(to: $0) }
+                    onScrub: { model.scrub(to: $0) },
+                    onTrimEditBegan: { model.recordUndo() }
                 )
                 .frame(height: 44)
             }

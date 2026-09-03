@@ -24,6 +24,9 @@ struct PaintOverlay: View {
     let videoRect: CGRect
     @State private var liveStroke: PaintStroke?
     @State private var selectDrag: SelectDrag?
+    /// One undo snapshot per move/scale drag, taken when it first travels far
+    /// enough to count — a plain selection click records nothing.
+    @State private var recordedThisDrag = false
 
     private enum SelectDrag {
         case move(last: CGPoint)                     // last drag location, view coords
@@ -125,6 +128,20 @@ struct PaintOverlay: View {
         if selectDrag == nil {
             selectDrag = beginSelectDrag(at: value.startLocation)
         }
+        // Below the travel threshold nothing mutates (and `last` stays put, so the
+        // accumulated motion applies in full once the threshold is crossed) — the
+        // undo snapshot lands exactly once, before the first real edit.
+        let traveled = hypot(value.translation.width, value.translation.height)
+        switch selectDrag {
+        case .move, .scale:
+            guard recordedThisDrag || traveled > 2 else { return }
+            if !recordedThisDrag {
+                model.recordUndo()
+                recordedThisDrag = true
+            }
+        case .click, nil:
+            break
+        }
         switch selectDrag {
         case .move(let last):
             model.translateSelectedStroke(by: CGPoint(
@@ -156,6 +173,7 @@ struct PaintOverlay: View {
             model.selectedStrokeID = paintedStroke(at: value.location)?.id
         }
         selectDrag = nil
+        recordedThisDrag = false
     }
 
     /// The topmost stroke whose painted outline sits under `point` — interiors of

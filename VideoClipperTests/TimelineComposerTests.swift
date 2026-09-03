@@ -196,6 +196,88 @@ struct TimelineComposerTests {
 
     // MARK: - Export
 
+    /// Average luminance of a frame rendered through the composition (0…1).
+    private func luminance(of image: CGImage) throws -> Double {
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        var raw = [UInt8](repeating: 0, count: 4)
+        let context = try #require(CGContext(
+            data: &raw, width: 1, height: 1,
+            bitsPerComponent: 8, bytesPerRow: 4, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return (Double(raw[0]) + Double(raw[1]) + Double(raw[2])) / (3 * 255)
+    }
+
+    @Test func compositionWithARealReversedRenderShowsFrames() async throws {
+        let source = try sampleURL()
+        let reversed = try await ReverseRenderer.render(sourceURL: source)
+        let layers = [
+            TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0),
+            TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0.5, reversed: true),
+        ]
+        let (composition, videoComposition) = try await TimelineComposer.makeComposition(
+            layers: layers, sourceURL: source, reversedURL: reversed,
+            rotationQuarters: 0, cropRect: nil)
+
+        let generator = AVAssetImageGenerator(asset: composition)
+        generator.videoComposition = videoComposition
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        for seconds in [0.2, 1.0] {   // forward region, then the reversed region
+            let frame = try await generator.image(
+                at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+            let luma = try luminance(of: frame)
+            #expect(luma > 0.05, "frame at \(seconds)s rendered black (luma \(luma))")
+        }
+    }
+
+    @Test func instructionsCoverTheCompositionExactlyForOffGridTimes() async throws {
+        // Drag-produced times are arbitrary doubles. 600×0.334 = 200.4 and
+        // 600×1.0006667 = 600.4 round down individually but their double-sum
+        // rounds up — without a final snap the instructions miss the
+        // composition's duration by a tick, invalidating the whole
+        // videoComposition (AVPlayer then renders black everywhere).
+        let source = try sampleURL()
+        // Fraction pairs (of a 1/600 tick) chosen so that whichever way
+        // CMTime(seconds:) resolves sub-tick values, at least one pair makes the
+        // per-value conversions disagree with the converted double-sum.
+        let offGrid: [(start: Double, out: Double)] = [
+            (0.334, 1.0006667),        // .4 and .4
+            (0.3348333, 1.0015),       // .9 and .9
+            (0.3343333, 1.0011667),    // .6 and .7
+            (0.3340833, 1.0004167),    // .25 and .25
+        ]
+        for times in offGrid {
+            let layers = [
+                TimelineLayer(sourceIn: 0, sourceOut: times.out, start: times.start)
+            ]
+            let (composition, videoComposition) = try await TimelineComposer.makeComposition(
+                layers: layers, sourceURL: source, reversedURL: nil,
+                rotationQuarters: 0, cropRect: nil)
+
+            var cursor = CMTime.zero
+            for instruction in videoComposition.instructions {
+                #expect(instruction.timeRange.start == cursor)
+                cursor = instruction.timeRange.end
+            }
+            #expect(cursor == composition.duration,
+                    "instructions end \(cursor.seconds) ≠ duration \(composition.duration.seconds) for start \(times.start), out \(times.out)")
+        }
+    }
+
+    @Test func exportHonorsAnExplicitWorkAreaRange() async throws {
+        let source = try sampleURL()
+        let layers = [TimelineLayer(sourceIn: 0, sourceOut: 1.2, start: 0.3)]
+        let output = try await TimelineComposer.export(
+            layers: layers, sourceURL: source, reversedURL: nil,
+            rotationQuarters: 0, cropRect: nil, range: (start: 0.3, end: 1.1))
+        defer { try? FileManager.default.removeItem(at: output) }
+
+        let duration = try await AVURLAsset(url: output).load(.duration).seconds
+        #expect(abs(duration - 0.8) < 0.1)   // just the work area, no leading black
+    }
+
     @Test func exportProducesAnMp4OfTheComposedDuration() async throws {
         let source = try sampleURL()
         let layers = [

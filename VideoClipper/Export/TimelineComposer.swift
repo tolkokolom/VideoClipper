@@ -138,6 +138,17 @@ nonisolated enum TimelineComposer {
             instructions.append(instruction)
         }
 
+        // Instruction ranges come from double arithmetic (start + out − in) rounded
+        // once; the tracks' ends come from three separately rounded CMTimes. On the
+        // 600-tick grid these can disagree by a tick for drag-produced times — and
+        // instructions that miss the composition's duration even slightly invalidate
+        // the whole videoComposition (AVPlayer then renders black everywhere). Snap
+        // the final instruction to the real duration.
+        if let last = instructions.last, last.timeRange.end != composition.duration,
+           composition.duration > last.timeRange.start {
+            last.timeRange = CMTimeRange(start: last.timeRange.start, end: composition.duration)
+        }
+
         let videoComposition = AVMutableVideoComposition()
         videoComposition.instructions = instructions
         videoComposition.renderSize = renderSize
@@ -147,12 +158,15 @@ nonisolated enum TimelineComposer {
     }
 
     /// Exports the composed timeline to a temp .mp4 (silent, edits applied).
+    /// `range` limits the export to a master-timeline window (the work area);
+    /// nil exports the whole composition.
     static func export(
         layers: [TimelineLayer],
         sourceURL: URL,
         reversedURL: URL?,
         rotationQuarters: Int,
-        cropRect: CGRect?
+        cropRect: CGRect?,
+        range: (start: Double, end: Double)? = nil
     ) async throws -> URL {
         let (composition, videoComposition) = try await makeComposition(
             layers: layers, sourceURL: sourceURL, reversedURL: reversedURL,
@@ -162,6 +176,11 @@ nonisolated enum TimelineComposer {
             throw TimelineComposerError.cannotBuild
         }
         session.videoComposition = videoComposition
+        if let range {
+            session.timeRange = CMTimeRange(
+                start: CMTime(seconds: range.start, preferredTimescale: 600),
+                end: CMTime(seconds: range.end, preferredTimescale: 600))
+        }
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("VideoClipperTimeline-\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: output)
