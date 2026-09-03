@@ -193,6 +193,24 @@ struct TimelineComposerTests {
         let segment = try #require(track.segments.first)
         #expect(segment.sourceURL == source)
     }
+
+    // MARK: - Export
+
+    @Test func exportProducesAnMp4OfTheComposedDuration() async throws {
+        let source = try sampleURL()
+        let layers = [
+            TimelineLayer(sourceIn: 0, sourceOut: 0.8, start: 0),
+            TimelineLayer(sourceIn: 0, sourceOut: 0.8, start: 0.4),
+        ]
+        let output = try await TimelineComposer.export(
+            layers: layers, sourceURL: source, reversedURL: nil,
+            rotationQuarters: 0, cropRect: nil)
+        defer { try? FileManager.default.removeItem(at: output) }
+
+        #expect(output.pathExtension == "mp4")
+        let duration = try await AVURLAsset(url: output).load(.duration).seconds
+        #expect(abs(duration - 1.2) < 0.1)
+    }
 }
 
 private final class BundleToken {}

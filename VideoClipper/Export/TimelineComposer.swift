@@ -145,4 +145,27 @@ nonisolated enum TimelineComposer {
             value: 1, timescale: CMTimeScale(max(1, frameRate.rounded())))
         return (composition, videoComposition)
     }
+
+    /// Exports the composed timeline to a temp .mp4 (silent, edits applied).
+    static func export(
+        layers: [TimelineLayer],
+        sourceURL: URL,
+        reversedURL: URL?,
+        rotationQuarters: Int,
+        cropRect: CGRect?
+    ) async throws -> URL {
+        let (composition, videoComposition) = try await makeComposition(
+            layers: layers, sourceURL: sourceURL, reversedURL: reversedURL,
+            rotationQuarters: rotationQuarters, cropRect: cropRect)
+        guard let session = AVAssetExportSession(
+            asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw TimelineComposerError.cannotBuild
+        }
+        session.videoComposition = videoComposition
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VideoClipperTimeline-\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: output)
+        try await session.export(to: output, as: .mp4)
+        return output
+    }
 }

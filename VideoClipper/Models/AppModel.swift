@@ -583,6 +583,10 @@ final class AppModel {
 
     func export(_ clip: Clip, chooseDestination: Bool = false) {
         guard clip.isLoaded, !clip.exportState.isExporting else { return }
+        if clip.hasActiveTimeline {
+            exportTimeline(clip, chooseDestination: chooseDestination)
+            return
+        }
         guard clip.hasEdits else {
             errorMessage = "No edits to export — trim, crop, or rotate first."
             return
@@ -610,6 +614,34 @@ final class AppModel {
             } catch {
                 clip.exportState = .failed(error.localizedDescription)
                 self.errorMessage = "Couldn't export: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Timeline export: same destination conventions as the single-clip path.
+    private func exportTimeline(_ clip: Clip, chooseDestination: Bool) {
+        clip.exportState = .exporting
+        let layers = clip.timelineLayers
+        let reversedURL = clip.reversedAsset.readyURL
+        let quarters = clip.rotationQuarters
+        let crop = clip.isCropped ? clip.cropRect : nil
+        Task {
+            do {
+                let temp = try await TimelineComposer.export(
+                    layers: layers, sourceURL: clip.url, reversedURL: reversedURL,
+                    rotationQuarters: quarters, cropRect: crop)
+                guard let destination = self.resolveDestination(
+                    for: clip, produced: temp, choose: chooseDestination) else {
+                    try? FileManager.default.removeItem(at: temp)
+                    clip.exportState = .idle
+                    return
+                }
+                try ExportDestination.place(temp, at: destination)
+                clip.exportState = .done(destination)
+                AppLog.export.info("timeline exported → \(destination.lastPathComponent, privacy: .public)")
+            } catch {
+                clip.exportState = .failed(error.localizedDescription)
+                self.errorMessage = "Couldn't export timeline: \(error.localizedDescription)"
             }
         }
     }
