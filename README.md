@@ -54,6 +54,14 @@ timestamps, deltas between frames, and notes) and puts the manifest with
 the frames, the timing, and the commentary in one go. Staged crop/rotation
 applies to the exported frames; `⌥←` / `⌥→` jump between markers.
 
+## Timeline mode
+
+The **Timeline** tool stacks full-frame layers of the current clip, AE-style:
+duplicate a layer, reverse it (pre-rendered in the background), trim each
+layer's window, drag it along the master timeline, and drag rows vertically to
+change who's on top — during overlaps the topmost layer plays. The composed
+result previews live and `⌘S` exports it as a single silent video.
+
 ## Keyboard
 
 | Key | Action |

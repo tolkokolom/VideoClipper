@@ -68,7 +68,8 @@ struct MainView: View {
                         player: model.player,
                         visibleRect: ZoomMath.visibleRect(zoomState),
                         onWheel: { deltaY, anchor in
-                            guard model.activeTool != .crop, model.activeTool != .marker else { return }
+                            guard model.activeTool != .crop, model.activeTool != .marker,
+                                  model.activeTool != .timeline else { return }
                             zoomState = ZoomMath.wheelZoom(
                                 zoomState, anchor: anchor, deltaY: deltaY,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -76,7 +77,8 @@ struct MainView: View {
                             minimapEngaged(hideAfter: 0.6)
                         },
                         onPinch: { factor, anchor in
-                            guard model.activeTool != .crop, model.activeTool != .marker else { return }
+                            guard model.activeTool != .crop, model.activeTool != .marker,
+                                  model.activeTool != .timeline else { return }
                             zoomState = ZoomMath.zoom(
                                 zoomState, anchor: anchor, factor: factor,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -85,7 +87,7 @@ struct MainView: View {
                         },
                         onPan: { dxFrac, dyFrac in
                             guard model.activeTool != .crop, model.activeTool != .marker,
-                                  zoomState.zoom > 1 else { return }
+                                  model.activeTool != .timeline, zoomState.zoom > 1 else { return }
                             zoomState = ZoomMath.pan(
                                 zoomState, dxFrac: dxFrac, dyFrac: dyFrac,
                                 within: videoFrac(for: clip, in: geo.size)
@@ -136,7 +138,7 @@ struct MainView: View {
         .onChange(of: model.activeTool) {
             // Crop and Mark both need the unzoomed frame (Mark: paint coordinates
             // map straight onto the fitted rect only at 1x).
-            if model.activeTool == .crop || model.activeTool == .marker { resetZoom() }
+            if model.activeTool == .crop || model.activeTool == .marker || model.activeTool == .timeline { resetZoom() }
         }
     }
 
@@ -208,7 +210,9 @@ private struct ControlsView: View {
                 .buttonStyle(.plain)
                 .help(model.isPlaying ? "Pause (Space)" : "Play (Space)")
 
-                Text("\(timeString(playheadDisplayTime)) / \(timeString(clip.trimmedDuration))")
+                Text(model.activeTool == .timeline
+                    ? "\(timeString(model.currentTime)) / \(timeString(model.masterDuration))"
+                    : "\(timeString(playheadDisplayTime)) / \(timeString(clip.trimmedDuration))")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
 
@@ -226,24 +230,28 @@ private struct ControlsView: View {
                 }
             }
 
-            // The lane is always up in Mark mode (mark-here button) and Trim mode
-            // (set in/out buttons), and whenever there are marker pins to show.
-            if !clip.markers.isEmpty || model.activeTool == .marker || model.activeTool == .trim {
-                playheadActionLane
-            }
+            if model.activeTool == .timeline {
+                TimelineTrackView(model: model, clip: clip)
+            } else {
+                // The lane is always up in Mark mode (mark-here button) and Trim mode
+                // (set in/out buttons), and whenever there are marker pins to show.
+                if !clip.markers.isEmpty || model.activeTool == .marker || model.activeTool == .trim {
+                    playheadActionLane
+                }
 
-            TrimStrip(
-                thumbnails: clip.stripThumbnails,
-                duration: clip.duration,
-                minTrim: model.minTrim,
-                isTrimming: model.activeTool == .trim,
-                trimStart: $clip.trimStart,
-                trimEnd: $clip.trimEnd,
-                playhead: model.currentTime,
-                markers: clip.markers.map(\.time),
-                onScrub: { model.scrub(to: $0) }
-            )
-            .frame(height: 44)
+                TrimStrip(
+                    thumbnails: clip.stripThumbnails,
+                    duration: clip.duration,
+                    minTrim: model.minTrim,
+                    isTrimming: model.activeTool == .trim,
+                    trimStart: $clip.trimStart,
+                    trimEnd: $clip.trimEnd,
+                    playhead: model.currentTime,
+                    markers: clip.markers.map(\.time),
+                    onScrub: { model.scrub(to: $0) }
+                )
+                .frame(height: 44)
+            }
 
             HStack(spacing: 8) {
                 toolButton("Rotate", systemImage: "rotate.right", isActive: false, hasEdit: clip.isRotated) {
@@ -266,6 +274,13 @@ private struct ControlsView: View {
                     model.toggleTool(.marker)
                 }
                 .help("Frame markers — M at the playhead; ⌘E copies frames for an agent")
+
+                toolButton("Timeline", systemImage: "rectangle.stack",
+                           isActive: model.activeTool == .timeline,
+                           hasEdit: clip.hasActiveTimeline, dotColor: .cyan) {
+                    model.toggleTool(.timeline)
+                }
+                .help("Timeline — duplicate/reverse/trim/offset layers; drag rows to restack")
 
                 Spacer()
 

@@ -60,9 +60,17 @@ struct AppCommands: Commands {
             Button("Edit Marker Note") { model.editNoteAtPlayhead() }
                 .keyboardShortcut(.return, modifiers: [])
                 .disabled(model.selectedClip == nil || model.isEditingNote)
-            Button("Delete Selected Stroke") { model.deleteSelectedStroke() }
-                .keyboardShortcut(.delete, modifiers: [])
-                .disabled(model.selectedStrokeID == nil || model.isEditingNote)
+            Button(model.activeTool == .timeline ? "Delete Layer" : "Delete Selected Stroke") {
+                if model.activeTool == .timeline {
+                    model.deleteSelectedLayer()
+                } else {
+                    model.deleteSelectedStroke()
+                }
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            .disabled(model.isEditingNote || (model.activeTool == .timeline
+                ? model.selectedLayerID == nil
+                : model.selectedStrokeID == nil))
             Button("Previous Marker") { model.jumpToMarker(offset: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
                 .disabled(model.selectedClip == nil || model.isEditingNote)
