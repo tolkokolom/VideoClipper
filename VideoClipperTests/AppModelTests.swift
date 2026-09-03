@@ -280,8 +280,11 @@ struct AppModelTests {
     // MARK: - Timeline layers
 
     /// Clip with duration 10 and a staged trim 1…9, timeline mode entered.
+    /// Marked loaded so `toggleTool(.timeline)` (which refuses unloaded clips) works
+    /// on models built from this helper too.
     private func timelineModel() -> AppModel {
         let model = modelWithClip()
+        model.selectedClip?.isLoaded = true
         model.selectedClip?.trimStart = 1
         model.selectedClip?.trimEnd = 9
         model.enterTimeline()
@@ -296,6 +299,61 @@ struct AppModelTests {
         #expect(layers?.first?.sourceOut == 9)
         #expect(layers?.first?.start == 0)
         #expect(model.selectedLayerID == layers?.first?.id)
+    }
+
+    /// `toggleTool(.timeline)` before the clip's async load finishes must not seed a
+    /// layer from `trimEnd == 0` — that would leave a permanently stuck, zero-length
+    /// timeline that pruneTrivialTimeline can never clear.
+    @Test func timelineToolRefusesUnloadedClip() {
+        let model = modelWithClip()
+        #expect(model.selectedClip?.isLoaded == false)
+        model.toggleTool(.timeline)
+        #expect(model.activeTool == nil)
+        #expect(model.selectedClip?.timelineLayers.isEmpty == true)
+    }
+
+    /// In Timeline mode `currentTime` is composed master-timeline time, not this
+    /// clip's source time — Set Trim In/Out, Mark Frame, marker navigation, and Edit
+    /// Marker Note must all no-op there, and work again once the mode is left.
+    @Test func timelineModeGuardsSourceTimeCommands() throws {
+        let model = timelineModel()   // trim 1…9, activeTool nil, isLoaded true
+        let clip = try #require(model.selectedClip)
+
+        // Seed a marker outside timeline mode so jump/edit have something to (not) find.
+        model.currentTime = 2
+        model.toggleMarker()
+        #expect(clip.markers.map(\.time) == [2])
+
+        model.activeTool = .timeline
+
+        model.currentTime = 3
+        model.setTrimIn()
+        #expect(clip.trimStart == 1)   // unchanged
+        model.currentTime = 5
+        model.setTrimOut()
+        #expect(clip.trimEnd == 9)     // unchanged
+
+        model.currentTime = 4
+        model.toggleMarker()
+        #expect(clip.markers.map(\.time) == [2])   // no marker added
+
+        model.jumpToMarker(offset: -1)
+        #expect(model.currentTime == 4)   // would have seeked to 2 if unguarded
+
+        model.currentTime = 2   // sits exactly on the seeded marker
+        model.editNoteAtPlayhead()
+        #expect(model.noteFocusRequest == nil)
+        #expect(model.activeTool == .timeline)   // requestNoteFocus would have switched tools
+
+        // Leaving timeline mode restores normal behavior.
+        model.toggleTool(.timeline)
+        #expect(model.activeTool == nil)
+
+        model.currentTime = 3
+        model.setTrimIn()
+        #expect(clip.trimStart == 3)
+        model.toggleMarker()
+        #expect(clip.markers.map(\.time) == [2, 3])
     }
 
     @Test func duplicateInsertsAboveAndSelectsTheCopy() throws {
@@ -337,6 +395,46 @@ struct AppModelTests {
         model.trimLayer(layer.id, sourceIn: 9.95, sourceOut: nil)   // would leave < 0.2 s
         let trimmed = try #require(model.selectedClip?.timelineLayers.first)
         #expect(trimmed.sourceOut - trimmed.sourceIn >= model.minLayerLength - 1e-9)
+    }
+
+    /// AE-style leading-edge trim: the in-point follows the cursor while the
+    /// layer's out-point (`end`) stays fixed on the master timeline.
+    @Test func trimLayerLeadingEdgeShiftsStartAndKeepsEndFixed() throws {
+        let model = timelineModel()   // layer: sourceIn 1, sourceOut 9, start 0
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: 2)
+        let endBefore = try #require(model.selectedClip?.timelineLayers.first?.end)
+        #expect(endBefore == 10)
+
+        model.trimLayerLeadingEdge(layer.id, sourceIn: 3)
+
+        let after = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(after.sourceIn == 3)
+        #expect(after.start == 4)
+        #expect(after.end == endBefore)
+    }
+
+    @Test func trimLayerLeadingEdgeClampsStartAtZero() throws {
+        let model = timelineModel()   // layer: sourceIn 1, sourceOut 9, start 0
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+
+        model.trimLayerLeadingEdge(layer.id, sourceIn: -5)
+
+        let after = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(after.start == 0)      // can't shift left of the timeline's origin
+        #expect(after.sourceIn == 1)   // held at its current value
+    }
+
+    @Test func trimLayerLeadingEdgeClampsToMinimumLayerLength() throws {
+        let model = timelineModel()   // layer: sourceIn 1, sourceOut 9, start 0
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        let endBefore = try #require(model.selectedClip?.timelineLayers.first?.end)
+
+        model.trimLayerLeadingEdge(layer.id, sourceIn: 20)   // far past sourceOut − 0.2
+
+        let after = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(abs(after.sourceIn - (after.sourceOut - model.minLayerLength)) < 1e-9)
+        #expect(after.end == endBefore)   // out-point still fixed even at the clamp
     }
 
     @Test func toggleReverseMirrorsTheTrimWindow() throws {

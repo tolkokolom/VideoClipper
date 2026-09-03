@@ -280,6 +280,7 @@ private struct ControlsView: View {
                            hasEdit: clip.hasActiveTimeline, dotColor: .cyan) {
                     model.toggleTool(.timeline)
                 }
+                .disabled(!clip.isLoaded)
                 .help("Timeline — duplicate/reverse/trim/offset layers; drag rows to restack")
 
                 Spacer()

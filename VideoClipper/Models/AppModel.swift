@@ -210,8 +210,11 @@ final class AppModel {
     }
 
     /// Adds a marker at the playhead, or removes the one already sitting there.
+    /// No-op in Timeline mode: `currentTime` there is master-timeline time, not
+    /// this clip's source time — acting on it would stage a marker at the wrong
+    /// instant.
     func toggleMarker() {
-        guard let clip = selectedClip else { return }
+        guard activeTool != .timeline, let clip = selectedClip else { return }
         if let index = markerIndexAtPlayhead {
             clip.markers.remove(at: index)
         } else {
@@ -306,14 +309,16 @@ final class AppModel {
 
     /// Return pressed outside a text field: edit the note of the marker under the
     /// playhead (the natural follow-up to M, which leaves the playhead on it).
+    /// No-op in Timeline mode — see `toggleMarker`.
     func editNoteAtPlayhead() {
-        guard let marker = markerAtPlayhead else { return }
+        guard activeTool != .timeline, let marker = markerAtPlayhead else { return }
         requestNoteFocus(marker)
     }
 
     /// Seeks to the next (+1) or previous (-1) marker; stays put past the ends.
+    /// No-op in Timeline mode — see `toggleMarker`.
     func jumpToMarker(offset: Int) {
-        guard let clip = selectedClip else { return }
+        guard activeTool != .timeline, let clip = selectedClip else { return }
         let times = clip.markers.map(\.time)
         let target = offset > 0
             ? times.first(where: { $0 > currentTime + markerEpsilon })
@@ -389,7 +394,11 @@ final class AppModel {
 
     func setLayerStart(_ id: TimelineLayer.ID, seconds: Double) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
-        clip.timelineLayers[index].start = max(0, seconds)
+        let newStart = max(0, seconds)
+        // Zero-movement clicks fire this with the unchanged value; skip the
+        // rebuild so the debounced preview refresh doesn't pause playback.
+        guard abs(newStart - clip.timelineLayers[index].start) > 1e-9 else { return }
+        clip.timelineLayers[index].start = newStart
         refreshTimelinePreview()
     }
 
@@ -398,12 +407,38 @@ final class AppModel {
     func trimLayer(_ id: TimelineLayer.ID, sourceIn: Double?, sourceOut: Double?) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
         var layer = clip.timelineLayers[index]
+        var changed = false
         if let sourceIn {
-            layer.sourceIn = min(max(0, sourceIn), layer.sourceOut - minLayerLength)
+            let clamped = min(max(0, sourceIn), layer.sourceOut - minLayerLength)
+            if abs(clamped - layer.sourceIn) > 1e-9 {
+                layer.sourceIn = clamped
+                changed = true
+            }
         }
         if let sourceOut {
-            layer.sourceOut = max(min(clip.duration, sourceOut), layer.sourceIn + minLayerLength)
+            let clamped = max(min(clip.duration, sourceOut), layer.sourceIn + minLayerLength)
+            if abs(clamped - layer.sourceOut) > 1e-9 {
+                layer.sourceOut = clamped
+                changed = true
+            }
         }
+        // No-op edits (e.g. a zero-movement selection click) skip the rebuild so
+        // the debounced preview refresh doesn't pause playback.
+        guard changed else { return }
+        clip.timelineLayers[index] = layer
+        refreshTimelinePreview()
+    }
+
+    /// Leading-edge trim: the in-point follows the cursor while the layer's
+    /// out-point stays fixed on the master timeline — start shifts by exactly
+    /// the delta the clamp allows (AE-style edge trim).
+    func trimLayerLeadingEdge(_ id: TimelineLayer.ID, sourceIn requested: Double) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        var layer = clip.timelineLayers[index]
+        var clamped = min(max(0, requested), layer.sourceOut - minLayerLength)
+        clamped = max(clamped, layer.sourceIn - layer.start)   // start may not go below 0
+        layer.start += clamped - layer.sourceIn
+        layer.sourceIn = clamped
         clip.timelineLayers[index] = layer
         refreshTimelinePreview()
     }
@@ -456,6 +491,7 @@ final class AppModel {
             } catch {
                 clip.reversedAsset = .failed
                 self.unReverse(clip)
+                self.refreshTimelinePreview()
                 self.errorMessage = "Couldn't reverse: \(error.localizedDescription)"
             }
         }
@@ -496,6 +532,9 @@ final class AppModel {
 
     func toggleTool(_ tool: Tool) {
         guard let clip = selectedClip else { return }
+        // Entering Timeline before the async load finishes would seed a layer from
+        // trimEnd == 0 — a zero-length layer that can never prune back out.
+        if tool == .timeline, !clip.isLoaded { return }
         let previous = activeTool
         activeTool = (activeTool == tool) ? nil : tool
         if activeTool == .crop, !clip.isCropped {
@@ -528,15 +567,18 @@ final class AppModel {
         }
         clip.cropAspect = clip.cropAspect.rotated
         applyPreviewComposition()
+        refreshTimelinePreview()   // applyPreviewComposition no-ops in timeline mode; this doesn't
     }
 
+    /// No-op in Timeline mode — see `toggleMarker`.
     func setTrimIn() {
-        guard let clip = selectedClip else { return }
+        guard activeTool != .timeline, let clip = selectedClip else { return }
         clip.trimStart = max(0, min(currentTime, clip.trimEnd - minTrim))
     }
 
+    /// No-op in Timeline mode — see `toggleMarker`.
     func setTrimOut() {
-        guard let clip = selectedClip else { return }
+        guard activeTool != .timeline, let clip = selectedClip else { return }
         clip.trimEnd = min(clip.duration, max(currentTime, clip.trimStart + minTrim))
     }
 

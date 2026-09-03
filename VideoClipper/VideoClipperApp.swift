@@ -49,17 +49,17 @@ struct AppCommands: Commands {
             Divider()
             Button("Set Trim In") { model.setTrimIn() }
                 .keyboardShortcut("i", modifiers: [])
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Button("Set Trim Out") { model.setTrimOut() }
                 .keyboardShortcut("o", modifiers: [])
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Divider()
             Button("Mark Frame") { model.toggleMarker() }
                 .keyboardShortcut("m", modifiers: [])
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Button("Edit Marker Note") { model.editNoteAtPlayhead() }
                 .keyboardShortcut(.return, modifiers: [])
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Button(model.activeTool == .timeline ? "Delete Layer" : "Delete Selected Stroke") {
                 if model.activeTool == .timeline {
                     model.deleteSelectedLayer()
@@ -73,10 +73,10 @@ struct AppCommands: Commands {
                 : model.selectedStrokeID == nil))
             Button("Previous Marker") { model.jumpToMarker(offset: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Button("Next Marker") { model.jumpToMarker(offset: 1) }
                 .keyboardShortcut(.rightArrow, modifiers: .option)
-                .disabled(model.selectedClip == nil || model.isEditingNote)
+                .disabled(model.selectedClip == nil || model.isEditingNote || model.activeTool == .timeline)
             Divider()
             Button("Previous Clip") { model.selectNeighbor(offset: -1) }
                 .keyboardShortcut(.leftArrow, modifiers: .command)

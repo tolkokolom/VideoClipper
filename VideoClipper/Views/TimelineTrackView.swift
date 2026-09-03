@@ -184,7 +184,7 @@ struct TimelineTrackView: View {
                     let steps = Int((-value.translation.height / rowHeight).rounded())
                     model.moveLayer(layer.id, toIndex: origin.zIndex + steps)
                 case .trimIn:
-                    model.trimLayer(layer.id, sourceIn: origin.sourceIn + deltaSeconds, sourceOut: nil)
+                    model.trimLayerLeadingEdge(layer.id, sourceIn: origin.sourceIn + deltaSeconds)
                 case .trimOut:
                     model.trimLayer(layer.id, sourceIn: nil, sourceOut: origin.sourceOut + deltaSeconds)
                 }
