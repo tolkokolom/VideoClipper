@@ -340,15 +340,21 @@ struct AppModelTests {
     }
 
     @Test func toggleReverseMirrorsTheTrimWindow() throws {
-        let model = timelineModel()
-        let layer = try #require(model.selectedClip?.timelineLayers.first)   // in 1, out 9, D = 10
+        let model = modelWithClip()
+        model.selectedClip?.trimStart = 1
+        model.selectedClip?.trimEnd = 7
+        model.enterTimeline()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)   // in 1, out 7, D = 10
         model.toggleReverse(layer.id)
         let reversed = try #require(model.selectedClip?.timelineLayers.first)
         #expect(reversed.reversed)
-        #expect(reversed.sourceIn == 1)    // 10 − 9
+        #expect(reversed.sourceIn == 3)    // 10 − 7
         #expect(reversed.sourceOut == 9)   // 10 − 1
         model.toggleReverse(layer.id)
-        #expect(model.selectedClip?.timelineLayers.first?.reversed == false)
+        let restored = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(restored.reversed == false)
+        #expect(restored.sourceIn == 1)
+        #expect(restored.sourceOut == 7)
     }
 
     @Test func pruneClearsOnlyTheTrivialSeedTimeline() throws {
