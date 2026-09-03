@@ -407,6 +407,29 @@ final class AppModel {
         layer.sourceOut = clip.duration - layer.sourceIn
         layer.sourceIn = mirroredIn
         clip.timelineLayers[index] = layer
+        if layer.reversed { ensureReversedAsset(for: clip) }
+    }
+
+    /// Kicks the one-per-clip reversed render if it isn't ready or running.
+    private func ensureReversedAsset(for clip: Clip) {
+        switch clip.reversedAsset {
+        case .rendering, .ready: return
+        case .idle, .failed: break
+        }
+        clip.reversedAsset = .rendering
+        let url = clip.url
+        Task {
+            do {
+                let output = try await ReverseRenderer.render(sourceURL: url)
+                clip.reversedAsset = .ready(output)
+            } catch {
+                clip.reversedAsset = .failed
+                for index in clip.timelineLayers.indices where clip.timelineLayers[index].reversed {
+                    self.toggleReverse(clip.timelineLayers[index].id)   // un-reverse (mirrors back)
+                }
+                self.errorMessage = "Couldn't reverse: \(error.localizedDescription)"
+            }
+        }
     }
 
     // MARK: - Tools
