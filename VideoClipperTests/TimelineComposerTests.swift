@@ -7,6 +7,7 @@
 //
 
 import Foundation
+@preconcurrency import AVFoundation
 import Testing
 @testable import VideoClipper
 
@@ -79,4 +80,42 @@ struct TimelineComposerTests {
         ])
         #expect(regions == [TimelineRegion(start: 0, end: 4, topLayerIndex: 1)])
     }
+
+    // MARK: - Composition building (integration, SampleClip.mov)
+
+    private func sampleURL() throws -> URL {
+        try #require(Bundle(for: BundleToken.self).url(forResource: "SampleClip", withExtension: "mov"))
+    }
+
+    @Test func compositionSpansMaxLayerEndWithOneInstructionPerRegion() async throws {
+        let source = try sampleURL()
+        let layers = [
+            TimelineLayer(sourceIn: 0, sourceOut: 1.2, start: 0),
+            TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0.6),
+        ]
+        let (composition, videoComposition) = try await TimelineComposer.makeComposition(
+            layers: layers, sourceURL: source, reversedURL: nil,
+            rotationQuarters: 0, cropRect: nil)
+
+        #expect(composition.tracks(withMediaType: .video).count == 2)
+        #expect(composition.tracks(withMediaType: .audio).isEmpty)   // silent timeline
+        #expect(abs(composition.duration.seconds - 1.6) < 0.05)
+        #expect(videoComposition.instructions.count
+            == TimelineComposer.regions(layers: layers).count)
+    }
+
+    @Test func gapRegionsGetAnEmptyBlackInstruction() async throws {
+        let source = try sampleURL()
+        let layers = [TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0.5)]
+        let (_, videoComposition) = try await TimelineComposer.makeComposition(
+            layers: layers, sourceURL: source, reversedURL: nil,
+            rotationQuarters: 0, cropRect: nil)
+
+        let first = try #require(
+            videoComposition.instructions.first as? AVMutableVideoCompositionInstruction)
+        #expect(first.layerInstructions.isEmpty)
+        #expect(abs(first.timeRange.duration.seconds - 0.5) < 0.02)
+    }
 }
+
+private final class BundleToken {}

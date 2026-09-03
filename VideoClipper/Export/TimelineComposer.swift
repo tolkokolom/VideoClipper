@@ -7,6 +7,7 @@
 //  boundary and names the topmost covering layer per slice (nil = gap → black).
 //
 
+@preconcurrency import AVFoundation
 import Foundation
 
 /// One slice of the master timeline with a single visible layer (or none).
@@ -15,6 +16,18 @@ struct TimelineRegion: Equatable, Sendable {
     var end: Double
     /// Index into the layers array; nil renders black.
     var topLayerIndex: Int?
+}
+
+nonisolated enum TimelineComposerError: LocalizedError {
+    case noVideoTrack
+    case cannotBuild
+
+    var errorDescription: String? {
+        switch self {
+        case .noVideoTrack: "The clip has no video track"
+        case .cannotBuild: "Couldn't build the timeline composition"
+        }
+    }
 }
 
 nonisolated enum TimelineComposer {
@@ -38,5 +51,91 @@ nonisolated enum TimelineComposer {
             }
         }
         return regions
+    }
+
+    /// One composition video track per layer; one instruction per region with the
+    /// visible track at opacity 1 and every other overlapping track at 0. Gap
+    /// regions render black. Rotation/crop transforms match ClipEditExporter's.
+    static func makeComposition(
+        layers: [TimelineLayer],
+        sourceURL: URL,
+        reversedURL: URL?,
+        rotationQuarters: Int,
+        cropRect: CGRect?
+    ) async throws -> (AVMutableComposition, AVMutableVideoComposition) {
+        let sourceAsset = AVURLAsset(url: sourceURL)
+        guard let sourceTrack = try await sourceAsset.loadTracks(withMediaType: .video).first else {
+            throw TimelineComposerError.noVideoTrack
+        }
+        let naturalSize = try await sourceTrack.load(.naturalSize)
+        let preferredTransform = try await sourceTrack.load(.preferredTransform)
+        let frameRate = (try? await sourceTrack.load(.nominalFrameRate)) ?? 30
+
+        let quarters = ((rotationQuarters % 4) + 4) % 4
+        var (transform, renderSize) = EditMath.rotation(
+            naturalSize: naturalSize, preferredTransform: preferredTransform, quarters: quarters)
+        if let cropRect, !EditMath.isIdentityCrop(cropRect) {
+            (transform, renderSize) = EditMath.applyCrop(
+                cropRect, transform: transform, renderSize: renderSize)
+        }
+
+        var reversedTrack: AVAssetTrack?
+        if let reversedURL {
+            reversedTrack = try await AVURLAsset(url: reversedURL)
+                .loadTracks(withMediaType: .video).first
+        }
+
+        let composition = AVMutableComposition()
+        var compositionTracks: [AVMutableCompositionTrack] = []
+        for layer in layers {
+            guard let track = composition.addMutableTrack(
+                withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                throw TimelineComposerError.cannotBuild
+            }
+            let mediaTrack = (layer.reversed ? reversedTrack : nil) ?? sourceTrack
+            try track.insertTimeRange(
+                CMTimeRange(
+                    start: CMTime(seconds: layer.sourceIn, preferredTimescale: 600),
+                    end: CMTime(seconds: layer.sourceOut, preferredTimescale: 600)),
+                of: mediaTrack,
+                at: CMTime(seconds: layer.start, preferredTimescale: 600))
+            compositionTracks.append(track)
+        }
+
+        var instructions: [AVMutableVideoCompositionInstruction] = []
+        for region in regions(layers: layers) {
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(
+                start: CMTime(seconds: region.start, preferredTimescale: 600),
+                end: CMTime(seconds: region.end, preferredTimescale: 600))
+            instruction.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+            if let top = region.topLayerIndex {
+                var layerInstructions: [AVMutableVideoCompositionLayerInstruction] = []
+                let visible = AVMutableVideoCompositionLayerInstruction(
+                    assetTrack: compositionTracks[top])
+                visible.setTransform(transform, at: .zero)
+                visible.setOpacity(1, at: .zero)
+                layerInstructions.append(visible)
+                // Every other track with media in this region must be listed —
+                // hidden explicitly — or the compositor's output is undefined.
+                for (index, track) in compositionTracks.enumerated()
+                where index != top
+                    && layers[index].start < region.end && layers[index].end > region.start {
+                    let hidden = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+                    hidden.setTransform(transform, at: .zero)
+                    hidden.setOpacity(0, at: .zero)
+                    layerInstructions.append(hidden)
+                }
+                instruction.layerInstructions = layerInstructions
+            }
+            instructions.append(instruction)
+        }
+
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.instructions = instructions
+        videoComposition.renderSize = renderSize
+        videoComposition.frameDuration = CMTime(
+            value: 1, timescale: CMTimeScale(max(1, frameRate.rounded())))
+        return (composition, videoComposition)
     }
 }
