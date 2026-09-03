@@ -226,9 +226,10 @@ private struct ControlsView: View {
                 }
             }
 
-            // In Mark mode the lane is always up — it carries the mark-here button.
-            if !clip.markers.isEmpty || model.activeTool == .marker {
-                markerNoteLane
+            // The lane is always up in Mark mode (mark-here button) and Trim mode
+            // (set in/out buttons), and whenever there are marker pins to show.
+            if !clip.markers.isEmpty || model.activeTool == .marker || model.activeTool == .trim {
+                playheadActionLane
             }
 
             TrimStrip(
@@ -315,6 +316,20 @@ private struct ControlsView: View {
         )
     }
 
+    private func trimQuickButton(
+        _ label: String, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 20, height: 14)
+                .background(Color.yellow, in: RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
     private func toolButton(
         _ title: String,
         systemImage: String,
@@ -337,10 +352,12 @@ private struct ControlsView: View {
         .tint(isActive ? Color.accentColor : nil)
     }
 
-    /// Thin lane above the strip: one pin per marker at its timeline position.
-    /// Hover highlights the marker's row in the side panel (and vice versa); click
-    /// shows the frame, opens the Mark tool, and focuses the note field.
-    private var markerNoteLane: some View {
+    /// Thin lane above the strip: one pin per marker at its timeline position, plus
+    /// tool-specific quick actions riding the playhead (mark-here in Mark mode,
+    /// set in/out in Trim mode). Hovering a pin highlights the marker's row in the
+    /// side panel (and vice versa); clicking one shows the frame, opens the Mark
+    /// tool, and focuses the note field.
+    private var playheadActionLane: some View {
         GeometryReader { geo in
             ForEach(clip.markers) { marker in
                 let fraction = marker.time / max(clip.duration, 0.001)
@@ -382,6 +399,19 @@ private struct ControlsView: View {
                 .buttonStyle(.plain)
                 .position(x: x, y: 8)
                 .help(onMarker ? "Remove this marker (M)" : "Mark this frame (M)")
+            }
+
+            // Trim quick actions riding the playhead: set in (left) / out (right),
+            // labeled like their keys.
+            if model.activeTool == .trim {
+                let x = min(max(
+                    CGFloat(model.currentTime / max(clip.duration, 0.001)) * geo.size.width,
+                    26), geo.size.width - 26)
+                HStack(spacing: 4) {
+                    trimQuickButton("[", help: "Set trim in at playhead (I)") { model.setTrimIn() }
+                    trimQuickButton("]", help: "Set trim out at playhead (O)") { model.setTrimOut() }
+                }
+                .position(x: x, y: 8)
             }
         }
         .frame(height: 16)

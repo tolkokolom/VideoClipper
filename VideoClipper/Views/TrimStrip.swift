@@ -91,28 +91,27 @@ struct TrimStrip: View {
                         .allowsHitTesting(false)
                 }
 
-                // Playhead line (both modes); a grab knob in scrub mode.
+                // Playhead line + grab knob (both modes).
                 Rectangle()
                     .fill(.white)
                     .frame(width: 2, height: height)
                     .offset(x: playheadX - 1)
                     .allowsHitTesting(false)
 
-                if !isTrimming {
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 12, height: 12)
-                        .shadow(radius: 1)
-                        .offset(x: playheadX - 6)
-                        .allowsHitTesting(false)
-                }
+                Circle()
+                    .fill(.white)
+                    .frame(width: 12, height: 12)
+                    .shadow(radius: 1)
+                    .offset(x: playheadX - 6)
+                    .allowsHitTesting(false)
             }
             .animation(.easeOut(duration: 0.22), value: thumbnails.isEmpty)
             .contentShape(.rect)
             .coordinateSpace(name: space)
-            // Scrub the whole strip when not trimming; in trim mode let only the handles
-            // (subviews) receive drags.
-            .gesture(scrubGesture(width: width), including: isTrimming ? .subviews : .all)
+            // Scrubbing works in both modes. The trim handles' own drags recognize at
+            // zero distance, so as deeper views they win over this strip-level gesture
+            // when the drag starts on a handle.
+            .gesture(scrubGesture(width: width))
         }
     }
 
@@ -135,7 +134,9 @@ struct TrimStrip: View {
     }
 
     private func drag(width: CGFloat, isStart: Bool) -> some Gesture {
-        DragGesture(coordinateSpace: .named(space))
+        // minimumDistance 0: must recognize instantly, or the strip's zero-distance
+        // scrub gesture claims the drag before this one starts.
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(space))
             .onChanged { value in
                 guard duration > 0, width > 0 else { return }
                 let fraction = min(max(value.location.x / width, 0), 1)
