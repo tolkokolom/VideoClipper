@@ -277,6 +277,100 @@ struct AppModelTests {
         #expect(model.selectedClip?.markers.count == 1)
     }
 
+    // MARK: - Timeline layers
+
+    /// Clip with duration 10 and a staged trim 1…9, timeline mode entered.
+    private func timelineModel() -> AppModel {
+        let model = modelWithClip()
+        model.selectedClip?.trimStart = 1
+        model.selectedClip?.trimEnd = 9
+        model.enterTimeline()
+        return model
+    }
+
+    @Test func enterTimelineSeedsOneLayerFromTheStagedTrim() {
+        let model = timelineModel()
+        let layers = model.selectedClip?.timelineLayers
+        #expect(layers?.count == 1)
+        #expect(layers?.first?.sourceIn == 1)
+        #expect(layers?.first?.sourceOut == 9)
+        #expect(layers?.first?.start == 0)
+        #expect(model.selectedLayerID == layers?.first?.id)
+    }
+
+    @Test func duplicateInsertsAboveAndSelectsTheCopy() throws {
+        let model = timelineModel()
+        let original = try #require(model.selectedClip?.timelineLayers.first)
+        model.duplicateLayer(original.id)
+        let layers = try #require(model.selectedClip?.timelineLayers)
+        #expect(layers.count == 2)
+        #expect(layers[0].id == original.id)
+        #expect(layers[1].id != original.id)
+        #expect(layers[1].sourceIn == original.sourceIn && layers[1].start == original.start)
+        #expect(model.selectedLayerID == layers[1].id)
+    }
+
+    @Test func deleteLayerClearsItsSelection() throws {
+        let model = timelineModel()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.deleteLayer(layer.id)
+        #expect(model.selectedClip?.timelineLayers.isEmpty == true)
+        #expect(model.selectedLayerID == nil)
+    }
+
+    @Test func moveLayerReordersZ() throws {
+        let model = timelineModel()
+        let bottom = try #require(model.selectedClip?.timelineLayers.first)
+        model.duplicateLayer(bottom.id)
+        model.moveLayer(bottom.id, toIndex: 1)
+        #expect(model.selectedClip?.timelineLayers.last?.id == bottom.id)
+    }
+
+    @Test func layerStartAndTrimClampToLegalRanges() throws {
+        let model = timelineModel()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: -3)
+        #expect(model.selectedClip?.timelineLayers.first?.start == 0)
+        model.trimLayer(layer.id, sourceIn: -1, sourceOut: 99)
+        #expect(model.selectedClip?.timelineLayers.first?.sourceIn == 0)
+        #expect(model.selectedClip?.timelineLayers.first?.sourceOut == 10)
+        model.trimLayer(layer.id, sourceIn: 9.95, sourceOut: nil)   // would leave < 0.2 s
+        let trimmed = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(trimmed.sourceOut - trimmed.sourceIn >= model.minLayerLength - 1e-9)
+    }
+
+    @Test func toggleReverseMirrorsTheTrimWindow() throws {
+        let model = timelineModel()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)   // in 1, out 9, D = 10
+        model.toggleReverse(layer.id)
+        let reversed = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(reversed.reversed)
+        #expect(reversed.sourceIn == 1)    // 10 − 9
+        #expect(reversed.sourceOut == 9)   // 10 − 1
+        model.toggleReverse(layer.id)
+        #expect(model.selectedClip?.timelineLayers.first?.reversed == false)
+    }
+
+    @Test func pruneClearsOnlyTheTrivialSeedTimeline() throws {
+        let model = timelineModel()
+        model.pruneTrivialTimeline()
+        #expect(model.selectedClip?.timelineLayers.isEmpty == true)
+
+        model.enterTimeline()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        model.setLayerStart(layer.id, seconds: 2)
+        model.pruneTrivialTimeline()
+        #expect(model.selectedClip?.timelineLayers.count == 1)
+    }
+
+    @Test func masterDurationIsMaxOfLayerEndsAndSourceDuration() throws {
+        let model = timelineModel()
+        let layer = try #require(model.selectedClip?.timelineLayers.first)
+        #expect(model.masterDuration == 10)          // clip duration dominates (8 s layer)
+        model.setLayerStart(layer.id, seconds: 5)    // layer now ends at 13
+        #expect(model.masterDuration == 13)
+    }
+
     // MARK: - Frame handoff export
 
     @Test func exportMarkedFramesWithoutMarkersReportsError() {

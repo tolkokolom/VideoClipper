@@ -87,6 +87,11 @@ final class Clip: Identifiable {
     /// Sorted by time (AppModel.toggleMarker maintains the order).
     var markers: [FrameMarker] = []
 
+    /// Timeline-mode layers; array order is z-order (last = topmost). Empty =
+    /// no timeline. Staged like every other edit.
+    var timelineLayers: [TimelineLayer] = []
+    var reversedAsset: ReversedAssetState = .idle
+
     var exportState: ExportState = .idle
     var frameExportState: ExportState = .idle
 
@@ -116,7 +121,8 @@ final class Clip: Identifiable {
     var isTrimmed: Bool { duration > 0 && (trimStart > 0.05 || trimEnd < duration - 0.05) }
     var isCropped: Bool { !EditMath.isIdentityCrop(cropRect) }
     var isRotated: Bool { rotationQuarters != 0 }
-    var hasEdits: Bool { isTrimmed || isCropped || isRotated }
+    var hasActiveTimeline: Bool { !timelineLayers.isEmpty }
+    var hasEdits: Bool { isTrimmed || isCropped || isRotated || hasActiveTimeline }
 
     /// Loads duration, orientation-resolved aspect, and a filmstrip poster frame.
     func load() async {

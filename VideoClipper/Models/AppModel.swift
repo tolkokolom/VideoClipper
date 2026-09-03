@@ -31,6 +31,10 @@ final class AppModel {
     /// M works right after scrubbing without pressing Enter first. MarkerPanel listens.
     private(set) var noteBlurSignal = 0
 
+    /// Timeline mode: the layer selected for editing.
+    var selectedLayerID: TimelineLayer.ID?
+    let minLayerLength = 0.2
+
     /// Drops note-field focus if a note is being edited.
     func endNoteEditing() {
         guard isEditingNote else { return }
@@ -42,7 +46,7 @@ final class AppModel {
     /// Guards async preview-composition application against clip switches mid-await.
     @ObservationIgnored private var previewGeneration = 0
 
-    enum Tool { case trim, crop, marker }
+    enum Tool { case trim, crop, marker, timeline }
 
     let minTrim: Double = 1
 
@@ -309,6 +313,100 @@ final class AppModel {
             ? times.first(where: { $0 > currentTime + markerEpsilon })
             : times.last(where: { $0 < currentTime - markerEpsilon })
         if let target { seek(to: target) }
+    }
+
+    // MARK: - Timeline layers
+
+    /// Ruler scale and playback ceiling for Timeline mode.
+    var masterDuration: Double {
+        guard let clip = selectedClip else { return 0 }
+        return max(clip.timelineLayers.map(\.end).max() ?? 0, clip.duration)
+    }
+
+    /// First entry seeds a single layer from the staged trim.
+    func enterTimeline() {
+        guard let clip = selectedClip else { return }
+        if clip.timelineLayers.isEmpty {
+            clip.timelineLayers = [
+                TimelineLayer(sourceIn: clip.trimStart, sourceOut: clip.trimEnd, start: 0)
+            ]
+        }
+        selectedLayerID = clip.timelineLayers.last?.id
+    }
+
+    /// Leaving the mode with just the untouched seed layer clears the timeline,
+    /// so a clip without real timeline work keeps the plain export path.
+    func pruneTrivialTimeline() {
+        guard let clip = selectedClip, clip.timelineLayers.count == 1,
+              let layer = clip.timelineLayers.first, !layer.reversed,
+              abs(layer.start) < 1e-9,
+              abs(layer.sourceIn - clip.trimStart) < 1e-9,
+              abs(layer.sourceOut - clip.trimEnd) < 1e-9 else { return }
+        clip.timelineLayers = []
+        selectedLayerID = nil
+    }
+
+    private func layerIndex(_ id: TimelineLayer.ID) -> Int? {
+        selectedClip?.timelineLayers.firstIndex { $0.id == id }
+    }
+
+    func duplicateLayer(_ id: TimelineLayer.ID) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        let source = clip.timelineLayers[index]
+        let copy = TimelineLayer(
+            sourceIn: source.sourceIn, sourceOut: source.sourceOut,
+            start: source.start, reversed: source.reversed)
+        clip.timelineLayers.insert(copy, at: index + 1)
+        selectedLayerID = copy.id
+    }
+
+    func deleteLayer(_ id: TimelineLayer.ID) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        clip.timelineLayers.remove(at: index)
+        if selectedLayerID == id { selectedLayerID = nil }
+    }
+
+    func deleteSelectedLayer() {
+        if let id = selectedLayerID { deleteLayer(id) }
+    }
+
+    func moveLayer(_ id: TimelineLayer.ID, toIndex target: Int) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        let clamped = min(max(target, 0), clip.timelineLayers.count - 1)
+        guard clamped != index else { return }
+        let layer = clip.timelineLayers.remove(at: index)
+        clip.timelineLayers.insert(layer, at: clamped)
+    }
+
+    func setLayerStart(_ id: TimelineLayer.ID, seconds: Double) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        clip.timelineLayers[index].start = max(0, seconds)
+    }
+
+    /// Pass nil to leave an edge untouched. Clamped to media bounds and the
+    /// minimum layer length.
+    func trimLayer(_ id: TimelineLayer.ID, sourceIn: Double?, sourceOut: Double?) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        var layer = clip.timelineLayers[index]
+        if let sourceIn {
+            layer.sourceIn = min(max(0, sourceIn), layer.sourceOut - minLayerLength)
+        }
+        if let sourceOut {
+            layer.sourceOut = max(min(clip.duration, sourceOut), layer.sourceIn + minLayerLength)
+        }
+        clip.timelineLayers[index] = layer
+    }
+
+    /// Flips direction and mirrors the trim window (in,out → D−out,D−in) so the
+    /// same content stays selected — AE time-reverse semantics.
+    func toggleReverse(_ id: TimelineLayer.ID) {
+        guard let clip = selectedClip, let index = layerIndex(id) else { return }
+        var layer = clip.timelineLayers[index]
+        layer.reversed.toggle()
+        let mirroredIn = clip.duration - layer.sourceOut
+        layer.sourceOut = clip.duration - layer.sourceIn
+        layer.sourceIn = mirroredIn
+        clip.timelineLayers[index] = layer
     }
 
     // MARK: - Tools
