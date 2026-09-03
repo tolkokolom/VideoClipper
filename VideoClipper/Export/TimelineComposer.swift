@@ -79,10 +79,17 @@ nonisolated enum TimelineComposer {
                 cropRect, transform: transform, renderSize: renderSize)
         }
 
+        // Keep the asset itself alive for the rest of the function: AVAssetTrack.asset is a
+        // weak back-reference, so an unretained temporary AVURLAsset here would be deallocated
+        // as soon as loadTracks returns, and the later insertTimeRange(_:of:at:) below would
+        // fail (AVFoundationErrorDomain -11800 / OSStatus -12780) reading from a track whose
+        // parent asset is gone. Same pattern as ClipEditExporter.exportRotationLossless's
+        // retained `asset` local.
+        var reversedAsset: AVURLAsset?
         var reversedTrack: AVAssetTrack?
         if let reversedURL {
-            reversedTrack = try await AVURLAsset(url: reversedURL)
-                .loadTracks(withMediaType: .video).first
+            reversedAsset = AVURLAsset(url: reversedURL)
+            reversedTrack = try await reversedAsset!.loadTracks(withMediaType: .video).first
         }
 
         let composition = AVMutableComposition()

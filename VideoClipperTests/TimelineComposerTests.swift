@@ -102,6 +102,42 @@ struct TimelineComposerTests {
         #expect(abs(composition.duration.seconds - 1.6) < 0.05)
         #expect(videoComposition.instructions.count
             == TimelineComposer.regions(layers: layers).count)
+
+        // Pin the visibility semantics of the overlap region (0.6–1.6, top = layer 1):
+        // the top layer's track must be listed first at opacity 1, and every other
+        // overlapping track must still be listed, hidden at opacity 0.
+        let compositionTracks = composition.tracks(withMediaType: .video)
+        let overlap = try #require(
+            videoComposition.instructions.last as? AVMutableVideoCompositionInstruction)
+        #expect(abs(overlap.timeRange.start.seconds - 0.6) < 0.02)
+        #expect(overlap.layerInstructions.count == 2)
+        #expect(overlap.layerInstructions[0].trackID == compositionTracks[1].trackID)
+        #expect(overlap.layerInstructions[1].trackID == compositionTracks[0].trackID)
+
+        // setOpacity(_:at:) records a (degenerate, constant) ramp rather than a bare
+        // value, so getOpacityRamp does report one here — start == end == the opacity
+        // that was set, holding from the region start with an indefinite duration
+        // (no further keyframe follows). Confirmed empirically before writing these
+        // assertions; see the report for the exact recorded values.
+        var visStart: Float = -1
+        var visEnd: Float = -1
+        var visRange = CMTimeRange.zero
+        let visHasRamp = overlap.layerInstructions[0].getOpacityRamp(
+            for: overlap.timeRange.start,
+            startOpacity: &visStart, endOpacity: &visEnd, timeRange: &visRange)
+        #expect(visHasRamp == true)
+        #expect(visStart == 1)
+        #expect(visEnd == 1)
+
+        var hidStart: Float = -1
+        var hidEnd: Float = -1
+        var hidRange = CMTimeRange.zero
+        let hidHasRamp = overlap.layerInstructions[1].getOpacityRamp(
+            for: overlap.timeRange.start,
+            startOpacity: &hidStart, endOpacity: &hidEnd, timeRange: &hidRange)
+        #expect(hidHasRamp == true)
+        #expect(hidStart == 0)
+        #expect(hidEnd == 0)
     }
 
     @Test func gapRegionsGetAnEmptyBlackInstruction() async throws {
@@ -115,6 +151,47 @@ struct TimelineComposerTests {
             videoComposition.instructions.first as? AVMutableVideoCompositionInstruction)
         #expect(first.layerInstructions.isEmpty)
         #expect(abs(first.timeRange.duration.seconds - 0.5) < 0.02)
+    }
+
+    // MARK: - Reversed-source selection
+
+    /// A cheap stand-in for a real reverse render: a copy of SampleClip.mov at a
+    /// distinct URL, so we can prove *which file* a track's media came from without
+    /// needing an actual time-reversed asset (makeComposition only loads a video track).
+    private func copyOfSample() throws -> URL {
+        let source = try sampleURL()
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.copyItem(at: source, to: tempURL)
+        return tempURL
+    }
+
+    @Test func reversedLayerUsesReversedURLWhenProvided() async throws {
+        let source = try sampleURL()
+        let reversedCopy = try copyOfSample()
+        defer { try? FileManager.default.removeItem(at: reversedCopy) }
+
+        let layers = [TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0, reversed: true)]
+        let (composition, _) = try await TimelineComposer.makeComposition(
+            layers: layers, sourceURL: source, reversedURL: reversedCopy,
+            rotationQuarters: 0, cropRect: nil)
+
+        let track = try #require(composition.tracks(withMediaType: .video).first)
+        let segment = try #require(track.segments.first)
+        #expect(segment.sourceURL == reversedCopy)
+    }
+
+    @Test func reversedLayerFallsBackToSourceWhenNoReversedURL() async throws {
+        let source = try sampleURL()
+        let layers = [TimelineLayer(sourceIn: 0, sourceOut: 1.0, start: 0, reversed: true)]
+        let (composition, _) = try await TimelineComposer.makeComposition(
+            layers: layers, sourceURL: source, reversedURL: nil,
+            rotationQuarters: 0, cropRect: nil)
+
+        let track = try #require(composition.tracks(withMediaType: .video).first)
+        let segment = try #require(track.segments.first)
+        #expect(segment.sourceURL == source)
     }
 }
 
