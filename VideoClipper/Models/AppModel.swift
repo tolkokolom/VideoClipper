@@ -402,12 +402,30 @@ final class AppModel {
     func toggleReverse(_ id: TimelineLayer.ID) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
         var layer = clip.timelineLayers[index]
-        layer.reversed.toggle()
-        let mirroredIn = clip.duration - layer.sourceOut
-        layer.sourceOut = clip.duration - layer.sourceIn
-        layer.sourceIn = mirroredIn
+        toggleMirror(&layer, duration: clip.duration)
         clip.timelineLayers[index] = layer
         if layer.reversed { ensureReversedAsset(for: clip) }
+    }
+
+    /// Flips `layer.reversed` and mirrors its trim window against `duration`
+    /// (in,out → D−out,D−in) — the shared math behind `toggleReverse` and the
+    /// render-failure rollback below.
+    private func toggleMirror(_ layer: inout TimelineLayer, duration: Double) {
+        layer.reversed.toggle()
+        let mirroredIn = duration - layer.sourceOut
+        layer.sourceOut = duration - layer.sourceIn
+        layer.sourceIn = mirroredIn
+    }
+
+    /// Un-reverses every reversed layer on `clip` directly (no `selectedClip`
+    /// lookup) — used when a background render fails, since the clip may no
+    /// longer be selected by the time the render settles.
+    private func unReverse(_ clip: Clip) {
+        for index in clip.timelineLayers.indices where clip.timelineLayers[index].reversed {
+            var layer = clip.timelineLayers[index]
+            toggleMirror(&layer, duration: clip.duration)
+            clip.timelineLayers[index] = layer
+        }
     }
 
     /// Kicks the one-per-clip reversed render if it isn't ready or running.
@@ -424,9 +442,7 @@ final class AppModel {
                 clip.reversedAsset = .ready(output)
             } catch {
                 clip.reversedAsset = .failed
-                for index in clip.timelineLayers.indices where clip.timelineLayers[index].reversed {
-                    self.toggleReverse(clip.timelineLayers[index].id)   // un-reverse (mirrors back)
-                }
+                self.unReverse(clip)
                 self.errorMessage = "Couldn't reverse: \(error.localizedDescription)"
             }
         }

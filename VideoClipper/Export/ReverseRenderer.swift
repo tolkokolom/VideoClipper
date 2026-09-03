@@ -83,15 +83,21 @@ nonisolated enum ReverseRenderer {
         // Pass 2: decode chunks from the tail; source frame i (whose display
         // window ends at end_i) plays at (duration − end_i), which mirrors the
         // movie while preserving every frame's own duration.
-        // Deviation from brief: chunkSize was 30. At 30 (and at 15, 10, 5) every
-        // append eventually failed with the same -16364 malfunction once several
-        // chunks/readers had cycled — reproducible regardless of which frames
-        // were involved, so it reads as a hardware-encoder/decoder-session
-        // resource ceiling in this environment (headless xctest host), not bad
-        // frame data. Verified reliably clean at 3 (two independent full runs,
-        // ~6.8s each, all ~196 chunk transitions succeeding) so this trades some
-        // throughput for correctness. Worth revisiting with a real device/profiling
-        // if reverse-render performance on long clips becomes a problem.
+        // Deviation from brief: chunkSize was 30. At 30 — and at 15, 10, and 5 —
+        // appends eventually fail with AVFoundationErrorDomain -11800 (underlying
+        // -16364, a VideoToolbox malfunction), reproducibly, after several
+        // chunks/readers have cycled. Suspecting AVAssetReaderTrackOutput's small
+        // internal buffer pool being starved by holding a chunk's worth of its
+        // buffers, we deep-copied every decoded frame into an independently
+        // allocated buffer immediately on read (see deepCopy below) and released
+        // the reader's own buffer right away — that hypothesis did NOT hold: the
+        // same -16364 still reproduced at 30 and at 5 with copies in place. The
+        // deep-copy is kept anyway (it's strictly more correct — memory no longer
+        // depends on the reader's pool), but the actual fix, empirically, is
+        // keeping the chunk small. Verified reliably clean at 3 (repeated fresh-
+        // cache runs, ~7s each, all ~196 chunk transitions succeeding); the real
+        // root cause is still unknown — see the task report for what was ruled
+        // out and what's worth investigating further.
         let chunkSize = 3
         var chunkUpper = times.count   // exclusive
         while chunkUpper > 0 {
@@ -107,7 +113,14 @@ nonisolated enum ReverseRenderer {
             var frames: [(time: CMTime, buffer: CVPixelBuffer)] = []
             while let sample = readerOutput.copyNextSampleBuffer() {
                 if let buffer = CMSampleBufferGetImageBuffer(sample) {
-                    frames.append((CMSampleBufferGetPresentationTimeStamp(sample), buffer))
+                    // Deep-copy immediately and let the reader's vended buffer go,
+                    // rather than retaining a whole chunk's worth of buffers straight
+                    // out of AVAssetReaderTrackOutput's own pool. Decoupling from that
+                    // pool is correct regardless (frames.count no longer bounds live
+                    // pool buffers), though it did NOT fix the -16364 malfunction below
+                    // on its own — see the chunkSize comment.
+                    guard let copy = deepCopy(buffer) else { throw ReverseRendererError.readFailed }
+                    frames.append((CMSampleBufferGetPresentationTimeStamp(sample), copy))
                 }
             }
             guard reader.status == .completed else { throw ReverseRendererError.readFailed }
@@ -135,6 +148,35 @@ nonisolated enum ReverseRenderer {
         try? FileManager.default.removeItem(at: output)
         try FileManager.default.moveItem(at: temp, to: output)
         return output
+    }
+
+    /// Deep-copies a decoded frame into its own IOSurface-backed buffer, independent
+    /// of the reader's internal pool (see the call site for why that matters).
+    private static func deepCopy(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(source)
+        let height = CVPixelBufferGetHeight(source)
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:]]
+        var copyBox: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary, &copyBox)
+        guard status == kCVReturnSuccess, let copy = copyBox else { return nil }
+
+        CVPixelBufferLockBaseAddress(source, .readOnly)
+        CVPixelBufferLockBaseAddress(copy, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(copy, [])
+            CVPixelBufferUnlockBaseAddress(source, .readOnly)
+        }
+        guard let srcBase = CVPixelBufferGetBaseAddress(source),
+              let dstBase = CVPixelBufferGetBaseAddress(copy) else { return nil }
+        let srcStride = CVPixelBufferGetBytesPerRow(source)
+        let dstStride = CVPixelBufferGetBytesPerRow(copy)
+        let rowBytes = min(srcStride, dstStride, width * 4)
+        for row in 0..<height {
+            memcpy(dstBase.advanced(by: row * dstStride), srcBase.advanced(by: row * srcStride), rowBytes)
+        }
+        return copy
     }
 
     private static func cacheURL(for source: URL) -> URL {
