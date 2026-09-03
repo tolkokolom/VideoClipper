@@ -45,6 +45,8 @@ final class AppModel {
     @ObservationIgnored private var timeObserver: Any?
     /// Guards async preview-composition application against clip switches mid-await.
     @ObservationIgnored private var previewGeneration = 0
+    @ObservationIgnored private var timelineGeneration = 0
+    @ObservationIgnored private var timelineRebuildTask: Task<Void, Never>?
 
     enum Tool { case trim, crop, marker, timeline }
 
@@ -103,6 +105,7 @@ final class AppModel {
 
     func select(_ clip: Clip) {
         guard clip.id != selectedClipID else { return }
+        pruneTrivialTimeline()
         selectedClipID = clip.id
         activeTool = nil
         currentTime = clip.trimStart
@@ -139,7 +142,7 @@ final class AppModel {
         currentTime = seconds
         isPlaying = player.rate > 0
         // Preview honours the trim: playback pauses at the out point.
-        if let clip = selectedClip, isPlaying, clip.isTrimmed, seconds >= clip.trimEnd {
+        if let clip = selectedClip, isPlaying, activeTool != .timeline, clip.isTrimmed, seconds >= clip.trimEnd {
             player.pause()
             isPlaying = false
         }
@@ -161,7 +164,10 @@ final class AppModel {
             return
         }
         // Restart inside the trimmed range when the playhead sits at/past the end.
-        if currentTime >= clip.trimEnd - 0.05 || currentTime < clip.trimStart {
+        if activeTool == .timeline {
+            let end = player.currentItem?.duration.seconds ?? 0
+            if end > 0, currentTime >= end - 0.05 { seek(to: 0) }
+        } else if currentTime >= clip.trimEnd - 0.05 || currentTime < clip.trimStart {
             seek(to: clip.trimStart)
         }
         player.play()
@@ -358,12 +364,14 @@ final class AppModel {
             start: source.start, reversed: source.reversed)
         clip.timelineLayers.insert(copy, at: index + 1)
         selectedLayerID = copy.id
+        refreshTimelinePreview()
     }
 
     func deleteLayer(_ id: TimelineLayer.ID) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
         clip.timelineLayers.remove(at: index)
         if selectedLayerID == id { selectedLayerID = nil }
+        refreshTimelinePreview()
     }
 
     func deleteSelectedLayer() {
@@ -376,11 +384,13 @@ final class AppModel {
         guard clamped != index else { return }
         let layer = clip.timelineLayers.remove(at: index)
         clip.timelineLayers.insert(layer, at: clamped)
+        refreshTimelinePreview()
     }
 
     func setLayerStart(_ id: TimelineLayer.ID, seconds: Double) {
         guard let clip = selectedClip, let index = layerIndex(id) else { return }
         clip.timelineLayers[index].start = max(0, seconds)
+        refreshTimelinePreview()
     }
 
     /// Pass nil to leave an edge untouched. Clamped to media bounds and the
@@ -395,6 +405,7 @@ final class AppModel {
             layer.sourceOut = max(min(clip.duration, sourceOut), layer.sourceIn + minLayerLength)
         }
         clip.timelineLayers[index] = layer
+        refreshTimelinePreview()
     }
 
     /// Flips direction and mirrors the trim window (in,out → D−out,D−in) so the
@@ -405,6 +416,7 @@ final class AppModel {
         toggleMirror(&layer, duration: clip.duration)
         clip.timelineLayers[index] = layer
         if layer.reversed { ensureReversedAsset(for: clip) }
+        refreshTimelinePreview()
     }
 
     /// Flips `layer.reversed` and mirrors its trim window against `duration`
@@ -440,6 +452,7 @@ final class AppModel {
             do {
                 let output = try await ReverseRenderer.render(sourceURL: url)
                 clip.reversedAsset = .ready(output)
+                self.refreshTimelinePreview()
             } catch {
                 clip.reversedAsset = .failed
                 self.unReverse(clip)
@@ -448,14 +461,56 @@ final class AppModel {
         }
     }
 
+    /// Rebuilds the composed preview item (debounced — drags emit streams of
+    /// edits; the composition is reference-only so rebuilds are cheap).
+    func refreshTimelinePreview() {
+        guard activeTool == .timeline, let clip = selectedClip,
+              !clip.timelineLayers.isEmpty else { return }
+        timelineGeneration += 1
+        let generation = timelineGeneration
+        let layers = clip.timelineLayers
+        let url = clip.url
+        let reversedURL = clip.reversedAsset.readyURL
+        let quarters = clip.rotationQuarters
+        let crop = clip.isCropped ? clip.cropRect : nil
+        timelineRebuildTask?.cancel()
+        timelineRebuildTask = Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            guard let (composition, videoComposition) = try? await TimelineComposer.makeComposition(
+                layers: layers, sourceURL: url, reversedURL: reversedURL,
+                rotationQuarters: quarters, cropRect: crop) else { return }
+            guard generation == self.timelineGeneration, self.activeTool == .timeline else { return }
+            let resumeTime = self.currentTime
+            let item = AVPlayerItem(asset: composition)
+            item.videoComposition = videoComposition
+            self.player.pause()
+            self.player.replaceCurrentItem(with: item)
+            await self.player.seek(
+                to: CMTime(seconds: resumeTime, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+    }
+
     // MARK: - Tools
 
     func toggleTool(_ tool: Tool) {
         guard let clip = selectedClip else { return }
+        let previous = activeTool
         activeTool = (activeTool == tool) ? nil : tool
         if activeTool == .crop, !clip.isCropped {
             // Opening Crop with no staged crop: start from the preset's centered frame.
             clip.cropRect = Self.fittedCrop(aspect: clip.cropAspect, in: clip)
+        }
+        if activeTool == .timeline {
+            player.pause()
+            isPlaying = false
+            enterTimeline()
+            refreshTimelinePreview()
+        } else if previous == .timeline {
+            pruneTrivialTimeline()
+            player.replaceCurrentItem(with: AVPlayerItem(asset: AVURLAsset(url: clip.url)))
+            seek(to: min(currentTime, clip.duration))
         }
         // Crop mode previews the full rotated frame (the overlay shows the crop);
         // any other mode previews the staged edit itself.
@@ -505,7 +560,7 @@ final class AppModel {
     /// While cropping: rotation only (the overlay owns the crop). Otherwise: the full
     /// staged edit, so the preview shows exactly what will export.
     func applyPreviewComposition() {
-        guard let clip = selectedClip, let item = player.currentItem else { return }
+        guard activeTool != .timeline, let clip = selectedClip, let item = player.currentItem else { return }
         previewGeneration += 1
         let generation = previewGeneration
         let crop: CGRect? = (activeTool == .crop || !clip.isCropped) ? nil : clip.cropRect
