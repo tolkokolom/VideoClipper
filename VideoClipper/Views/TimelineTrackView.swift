@@ -162,8 +162,17 @@ struct TimelineTrackView: View {
                     dragOrigin = DragOrigin(
                         start: layer.start, sourceIn: layer.sourceIn,
                         sourceOut: layer.sourceOut, zIndex: zIndex)
-                    let grabX = value.startLocation.x - barX
-                    dragKind = grabX < 8 ? .trimIn : (grabX > barWidth - 8 ? .trimOut : .move)
+                    // SwiftUI reports .local locations relative to the gestured view
+                    // itself (the .offset(x: barX) is already baked out), so
+                    // startLocation.x is already bar-local — no barX subtraction.
+                    let grabX = value.startLocation.x
+                    if barWidth < 24 {
+                        // A near-minimum-width bar has no usable edge zones — keep
+                        // it movable rather than trim-only.
+                        dragKind = .move
+                    } else {
+                        dragKind = grabX < 8 ? .trimIn : (grabX > barWidth - 8 ? .trimOut : .move)
+                    }
                 }
                 guard let origin = dragOrigin, let kind = dragKind else { return }
                 let deltaSeconds = Double(value.translation.width / max(scale, 0.001))
